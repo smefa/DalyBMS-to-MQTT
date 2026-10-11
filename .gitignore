@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+.clang_complete
+.gcc-flags.json
+
+# WiFi credentials - copy config.h.example to config.h and fill in.
+src/config.h

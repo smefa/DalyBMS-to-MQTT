@@ -1,0 +1,149 @@
+// Copy this file to src/config.h and fill in your values.
+// src/config.h is git-ignored so credentials never get committed.
+#pragma once
+
+#define WIFI_SSID       "your-wifi-ssid"
+#define WIFI_PASSWORD   "your-wifi-password"
+
+// Optional second network. When defined it is tried FIRST, and the one above is
+// the fallback after 15 s. The MQTT server follows the network that connected:
+// the *_EXT server on this one, MQTT_HOST on the one above. Remove all of the
+// *_EXT lines to use a single network and server.
+#define WIFI_SSID_EXT       "your-external-ssid"
+#define WIFI_PASSWORD_EXT   "your-external-password"
+
+// Hostname the D1 Mini announces over DHCP. Also the MQTT client id and
+// the Home Assistant device id, so keep it unique per bridge.
+#define DEVICE_HOSTNAME "dalybms"
+
+// Password required to push an over-the-air firmware update.
+#define OTA_PASSWORD    "change-me"
+
+// How often to run one poll cycle over all six DALY commands, milliseconds.
+#define POLL_INTERVAL_MS 5000
+
+// Data older than this is reported as stale: /status.json sets "valid": false
+// and the "BMS data fresh" entity in Home Assistant goes off. Must comfortably
+// exceed POLL_INTERVAL_MS or the data will flap between fresh and stale.
+#define STALE_AFTER_MS  30000
+
+// --- Home Assistant over MQTT-on-WebSocket ----------------------------------
+//
+// See docs/mqtt.md. The bridge speaks MQTT inside WebSocket frames, so it can
+// pass through a reverse proxy on port 443 (or reach the Mosquitto add-on's
+// WebSocket listener directly).
+
+#define MQTT_HOST       "ha.example.com"
+#define MQTT_PORT       443
+// Server to use on the external network (see WIFI_SSID_EXT). Optional.
+#define MQTT_HOST_EXT   "ha.example.com"
+#define MQTT_PORT_EXT   443
+// WebSocket path on the host. Whatever your proxy forwards to the broker.
+#define MQTT_PATH       "/mqtt"
+
+// 1 = wss:// (TLS), 0 = plain ws://.
+#define MQTT_TLS        1
+// SHA-1 fingerprint of the server certificate, as 40 hex chars with or without
+// colons. "" encrypts but does NOT verify who is on the other end. Note that
+// the fingerprint changes every time the certificate is renewed.
+// Optionally a separate one for MQTT_HOST_EXT; falls back to the one above.
+// #define MQTT_TLS_FINGERPRINT_EXT ""
+#define MQTT_TLS_FINGERPRINT ""
+
+// Comment both out for an anonymous broker.
+#define MQTT_USER       "dalybms"
+#define MQTT_PASSWORD   "change-me"
+
+// Topics are <base>/state and <base>/status.
+#define MQTT_BASE_TOPIC "dalybms"
+// Must match Home Assistant's MQTT discovery prefix (default "homeassistant").
+#define HA_DISCOVERY_PREFIX "homeassistant"
+
+// --- Power modes ------------------------------------------------------------
+//
+// Storage / normal / high, switched from Home Assistant (the "Power mode"
+// select) or by publishing the mode name to <MQTT_BASE_TOPIC>/mode/set. See
+// docs/mqtt.md. All of these are optional; the values shown are the defaults.
+//
+// The broker user needs READ access to <MQTT_BASE_TOPIC>/mode/set.
+//
+// Storage needs D0 (GPIO16) wired to RST, like the low-voltage guard.
+
+// Mode of a board that has never been told one: "storage", "normal" or "high".
+// After that the mode is kept in flash.
+// #define POWER_DEFAULT_MODE "normal"
+
+// high: radio in modem sleep, state published this often.
+// #define POWER_HIGH_PUBLISH_S 60
+
+// normal: state published this often, CPU and radio in light sleep once MQTT
+// has connected and caught up. The BMS is still polled every POWER_NORMAL_POLL_S
+// so the low-voltage guard keeps seeing data, and every POLL_INTERVAL_MS while
+// the guard is counting down.
+// POWER_NORMAL_LIGHT_SLEEP 0 keeps the CPU awake (plain modem sleep).
+// Listen interval is in beacons (~100 ms), 1..10, 0 = every DTIM. It needs NONOS
+// SDK 3.x (-D PIO_FRAMEWORK_ARDUINO_ESPRESSIF_SDK305 in platformio.ini); the
+// default SDK ignores it.
+// #define POWER_NORMAL_PUBLISH_S 900
+// #define POWER_NORMAL_POLL_S 60
+// #define POWER_NORMAL_LISTEN_INTERVAL 10
+// #define POWER_NORMAL_LIGHT_SLEEP 1
+
+// storage: radio off, one report per period. If a report cannot get through
+// (no WiFi, broker down) it is retried after POWER_STORAGE_RETRY_S. A bridge
+// that has just been powered up or switched to storage stays awake for
+// POWER_STORAGE_GRACE_S after reporting, as a window to change its mind or
+// flash it.
+// #define POWER_STORAGE_INTERVAL_S 86400
+// #define POWER_STORAGE_RETRY_S 10800
+// #define POWER_STORAGE_GRACE_S 120
+
+// If the BMS has not answered for this long, reboot. 0 disables.
+#define BMS_WATCHDOG_MS 300000
+
+// If WiFi has been down for this long, reboot. 0 disables.
+#define WIFI_WATCHDOG_MS 300000
+
+// --- Low-voltage guard ------------------------------------------------------
+//
+// The bridge is powered ahead of the BMS output MOSFETs, so it keeps drawing
+// current after the BMS has cut the load. These settings decide when it stops
+// doing that. See src/voltguard.h and docs/wiring.md.
+//
+// REQUIRES D0 (GPIO16) WIRED TO RST, or the board cannot wake itself again.
+#define GUARD_ENABLE 1
+
+// Trip below either of these. Defaults are LiFePO4: 3.00 V/cell is roughly the
+// bottom of the flat part of the curve, with real damage starting under 2.5 V.
+// For 4S lithium-ion, use something like 3200 / 128.
+#define GUARD_TRIP_CELL_MV 3000
+#define GUARD_TRIP_PACK_DV 120 // 0.1 V, so 120 = 12.0 V
+
+// Wake for good only above BOTH of these. Must be comfortably above the trip
+// values or the guard will sleep, wake, and sleep again on the same charge.
+#define GUARD_RELEASE_CELL_MV 3200
+#define GUARD_RELEASE_PACK_DV 128 // 12.8 V
+
+// How long the voltage must stay low before sleeping. This is what keeps an
+// inverter surge or a compressor start from parking the bridge.
+#define GUARD_TRIP_SECONDS 60
+
+// Once the guard has read the BMS's own low-voltage limit (0x59/0x5A) it trips
+// this far above it (and stands down this much higher still), instead of using the
+// fixed GUARD_TRIP_* / GUARD_RELEASE_* values, which then serve only as a fallback.
+// It also polls fast only when the weakest cell is within GUARD_NEAR_MV of that trip.
+#define GUARD_BMS_MARGIN_MV 50
+#define GUARD_BMS_RELEASE_MV 200
+#define GUARD_NEAR_MV 150
+
+// Charging current above this (0.1 A) holds the guard off: the pack is on its
+// way up, so there is nothing to protect it from.
+#define GUARD_CHARGE_HOLDOFF_DA 2
+
+// How long to sleep before waking to re-measure. Capped by the hardware at
+// about 71 minutes.
+#define GUARD_SLEEP_MINUTES 30
+
+// After waking, how long to wait for a good BMS frame before giving up and
+// sleeping again. Needs to cover at least one POLL_INTERVAL_MS.
+#define GUARD_RECHECK_SECONDS 20
