@@ -45,7 +45,6 @@ background:var(--line);color:var(--mut)}
 .pill.on{background:var(--ok);color:#fff}.pill.off{background:var(--bad);color:#fff}
 .pill.tog{cursor:pointer;border:0;font-family:inherit}.pill.tog:active{opacity:.7}
 .pill.busy{opacity:.5}
-#mmsg{margin-top:6px;font-size:13px;color:var(--mut)}
 details summary{cursor:pointer;color:var(--mut)}
 .lt{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;margin-bottom:6px}
 .lt th{font-size:11px;color:var(--mut);font-weight:500;text-align:right;padding:3px 0}
@@ -93,7 +92,6 @@ footer a{color:var(--mut)}
   <div class="row"><span>State</span><b id="state">--</b></div>
   <div class="row"><span>Charge MOS</span><button type="button" class="pill tog" id="cmos" onclick="toggleMos('charge_mos','cmos')" title="Click to switch (PIN)">--</button></div>
   <div class="row"><span>Discharge MOS</span><button type="button" class="pill tog" id="dmos" onclick="toggleMos('discharge_mos','dmos')" title="Click to switch (PIN)">--</button></div>
-  <div id="mmsg"></div>
   <div class="row"><span>Remaining</span><b id="rem">--</b></div>
   <div class="row"><span id="etaK">Time left</span><b id="eta">--</b></div>
   <div class="row"><span>Cycles</span><b id="cyc">--</b></div>
@@ -293,7 +291,7 @@ function setProfile(name){saveLimits('profile',name)}
 // reports on the next readings, not what was clicked.
 var mosNow={},mosWant=null;
 // Progress is shown in the PIN box itself: it stays open from the PIN to the outcome.
-function mosShow(t){$('mmsg').textContent=t;$('pinmsg').textContent=t}
+function mosShow(t){$('pinmsg').textContent=t}
 function mosEnd(t,ok){
   mosWant=null;mosShow(t);
   if(ok){setTimeout(function(){if(!mosWant)$('pind').close()},1200)}
@@ -305,6 +303,7 @@ function toggleMos(field,id){
   var d=$('pind'),f=$('pinf');
   $('pinq').textContent='Enter PIN to switch '+label.toLowerCase()+' '+(on?'on':'off');
   $('pin').value='';$('pinmsg').textContent='';
+  $('pin').disabled=false;$('pinok').disabled=false;
   $('pin').style.display='';$('pinok').style.display='';$('pinx').textContent='Cancel';
   f.onsubmit=function(e){
     if(!e.submitter||e.submitter.value!='ok')return;
