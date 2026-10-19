@@ -23,6 +23,14 @@ with the USB-serial bridge.
 
 Both sides are 3.3 V TTL, so no level shifter is needed.
 
+### Wake connections (all pins at a glance)
+
+| From | To | Purpose | Details |
+|---|---|---|---|
+| D0 (GPIO16) | RST | Lets the ESP8266 wake itself from deep sleep (guard, normal, storage) | [D0 → RST jumper](#power-and-the-d0--rst-jumper) |
+| D7 (GPIO13) | 1 kΩ, then BMS UART port position 4 (**S1**, activation) | Wakes a sleeping BMS (optional, `BMS_WAKE_PIN`) | [BMS wake (S1)](#bms-wake-s1) |
+| GND | BMS UART port position 1 | Common reference for the S1 pulse | [BMS wake (S1)](#bms-wake-s1) |
+
 ### Verified pinout (DALY 4S 12V 100A R05A1 F23)
 
 Found with the bench tool in [tools/uarttest/](../tools/uarttest/) and confirmed
@@ -36,12 +44,12 @@ the same port, which uses positions 1, 5 and 6.
 | 1 | black  | GND        | D1 GND |
 | 2 | green  | not used   | leave unconnected |
 | 3 | —      | empty slot | — |
-| 4 | yellow | not used   | leave unconnected |
+| 4 | yellow | Activation (S1 wake) | D7 (GPIO13) through 1 kΩ, optional; see [BMS wake (S1)](#bms-wake-s1) |
 | 5 | white  | BMS TX     | D1 **D5** (GPIO14) |
 | 6 | red    | BMS RX     | D1 TX (GPIO1) |
 
 **The red wire is a data line, not a supply.** Do not treat it as one, and do
-not connect the unused wires. Wire colours are specific to this pigtail; go by
+not connect the unused wires (green, position 2). The yellow wire is only for the optional wake pulse. Wire colours are specific to this pigtail; go by
 position if you build another cable.
 
 To re-check a different board, flash the `uarttest` environment
@@ -104,20 +112,23 @@ awake — so a sleeping bridge is not what flattens the battery.
 
 ## BMS wake (S1)
 
-The BMS has a wake pad, **S1**, which idles at about 2.9 V (an internal pull-up that
+The BMS has a wake line, **S1** ("activation"), on **position 4 of the UART port** (yellow wire on this pigtail), which idles at about 2.9 V (an internal pull-up that
 sources only ~30 µA). Shorting S1 to ground wakes the BMS. Storage mode uses it,
 because the BMS has usually gone to sleep during the bridge's day-long sleep and
 would not answer the report's first requests.
 
 | From | To | Why |
 |---|---|---|
-| D7 (GPIO13) | 1 kΩ, then BMS **S1** | pulled low for 300 ms to wake the BMS |
-| GND | BMS GND pad | common reference, same as the UART ground |
+| D7 (GPIO13) | 1 kΩ, then BMS UART position 4 (**S1**) | pulled low for 300 ms to wake the BMS |
+| GND | BMS UART position 1 | common reference, same as the UART ground |
 
 - The pin is an input (high-Z) except during a pulse. It is **never driven high**: S1
   is a 2.9 V pull-up, not a supply, and 5 V or 3.3 V on it is not what the BMS expects.
 - The 1 kΩ is protection against a firmware fault or a slipped probe; at 30 µA it
   drops about 30 mV. 510 Ω to 2 kΩ also work.
+- **The resistor is optional.** The pin is only ever pulled low, into a ~30 µA pull-up,
+  so a direct wire from D7 to S1 should work too. That is expected, not tested here:
+  the hardware verification below used the 1 kΩ. Keep it unless you have a reason not to.
 - D7 has no boot role. Avoid D3, D4 and D8, which do. D5, TX and D0 are taken above.
 - Enable it with `#define BMS_WAKE_PIN 13` in `config.h` ([config.h.example](../src/config.h.example)).
   Without that define the feature is off and the pin is not touched.

@@ -2,13 +2,25 @@
 // src/config.h is git-ignored so credentials never get committed.
 #pragma once
 
+// --- WiFi -------------------------------------------------------------------
+//
+// Internal network: the normal one, e.g. your home WiFi. Required. The MQTT server
+// used on it is MQTT_HOST / MQTT_PORT below.
 #define WIFI_SSID       "your-wifi-ssid"
 #define WIFI_PASSWORD   "your-wifi-password"
 
-// Optional second network. When defined it is tried FIRST, and the one above is
-// the fallback after 15 s. The MQTT server follows the network that connected:
-// the *_EXT server on this one, MQTT_HOST on the one above. Remove all of the
-// *_EXT lines to use a single network and server.
+// External network: optional second WiFi, for when the bridge sits somewhere else
+// (e.g. a different site or a mobile router) and the internal one is out of reach.
+// Both networks use the same hostname and settings; only the SSID and the MQTT
+// server differ. How it behaves when this is defined:
+//  - The external network is tried FIRST; after 15 s without a connection the
+//    internal one is tried, and they alternate until one connects.
+//  - After a WiFi drop the search starts over, external first.
+//  - The MQTT server follows the network that connected: MQTT_HOST_EXT / MQTT_PORT_EXT
+//    on this one, MQTT_HOST / MQTT_PORT on the internal one (see the MQTT section).
+//  - The log shows which network and server were chosen.
+// Remove WIFI_SSID_EXT, WIFI_PASSWORD_EXT and the MQTT_*_EXT lines to use a single
+// network and server. Without MQTT_HOST_EXT the internal server is used on both.
 #define WIFI_SSID_EXT       "your-external-ssid"
 #define WIFI_PASSWORD_EXT   "your-external-password"
 
