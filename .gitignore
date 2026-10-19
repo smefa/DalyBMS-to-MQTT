@@ -5,3 +5,11 @@
 
 # WiFi credentials - copy config.h.example to config.h and fill in.
 src/config.h
+
+# Output of tools/collect.ps1 (local samples and logs).
+tools/
+
+# Local development notes: kept on disk, not part of the repository.
+dev-notes/
+
+test/

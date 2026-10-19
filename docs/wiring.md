@@ -8,6 +8,8 @@ Note this is an ESP8266, not an ESP32, despite what the repository folder name
 suggests. It matters: the ESP8266 has one usable hardware UART, and it is shared
 with the USB-serial bridge.
 
+<img src="D1.webp" alt="Wemos D1 Mini board with pin labels" width="320">
+
 ## DALY UART (TTL) port
 
 | DALY UART | D1 Mini pin | ESP8266 GPIO |
@@ -83,7 +85,10 @@ wire:
 | D0 (GPIO16) | RST | Lets the ESP8266 wake itself from deep sleep |
 
 **Storage power mode needs the same jumper** ([docs/mqtt.md](mqtt.md#power-modes)): it
-sleeps for a day at a time and wakes itself the same way.
+sleeps for a day at a time and wakes itself the same way. So does normal, and so
+does **high** once WiFi has been missing for `POWER_OFFLINE_GIVEUP_S` (an hour by
+default): it then sleeps and tests for a network once a day. On a board without the
+jumper, set `POWER_OFFLINE_GIVEUP_S 0` in `config.h` so high never gives up.
 
 **Without this jumper the guard is a one-way trip.** The first time the pack goes
 low the board sleeps and never wakes; you get it back by power-cycling it. With
@@ -97,7 +102,35 @@ flash, and put it back. After the first flash you are on OTA anyway.
 Deep sleep here draws roughly 20 µA — about a thousandth of what the board uses
 awake — so a sleeping bridge is not what flattens the battery.
 
+## BMS wake (S1)
+
+The BMS has a wake pad, **S1**, which idles at about 2.9 V (an internal pull-up that
+sources only ~30 µA). Shorting S1 to ground wakes the BMS. Storage mode uses it,
+because the BMS has usually gone to sleep during the bridge's day-long sleep and
+would not answer the report's first requests.
+
+| From | To | Why |
+|---|---|---|
+| D7 (GPIO13) | 1 kΩ, then BMS **S1** | pulled low for 300 ms to wake the BMS |
+| GND | BMS GND pad | common reference, same as the UART ground |
+
+- The pin is an input (high-Z) except during a pulse. It is **never driven high**: S1
+  is a 2.9 V pull-up, not a supply, and 5 V or 3.3 V on it is not what the BMS expects.
+- The 1 kΩ is protection against a firmware fault or a slipped probe; at 30 µA it
+  drops about 30 mV. 510 Ω to 2 kΩ also work.
+- D7 has no boot role. Avoid D3, D4 and D8, which do. D5, TX and D0 are taken above.
+- Enable it with `#define BMS_WAKE_PIN 13` in `config.h` ([config.h.example](../src/config.h.example)).
+  Without that define the feature is off and the pin is not touched.
+- In every power mode the bridge pulses only if the BMS has not answered `BMS_WAKE_GRACE_S` (3 s)
+  after boot, then every `BMS_WAKE_RETRY_S` (10 s) while it stays silent, at most
+  `BMS_WAKE_MAX_PULSES` (3) times. An awake BMS is never pulsed. The pulse
+  length, settle time and counts are `BMS_WAKE_*` settings.
+- Verified on hardware 2026-10-12: a BMS that was silent (every request timing out) answered the sweep right after the first 300 ms pulse. Without the pulse, normal mode never woke it.
+- If the BMS does not wake, try a longer `BMS_WAKE_PULSE_MS`.
+
 ## Current draw
+
+These are typical values, **not measured on this board**.
 
 | State | Draw | Notes |
 |---|---|---|
@@ -130,8 +163,8 @@ Hardware TX is kept because software TX blocks for about 1 ms per byte.
 Consequences:
 
 1. **Nothing in the firmware may print to `Serial`** — GPIO1 is the BMS request
-   line. All diagnostics go to `http://<esp-ip>/log` instead.
-2. USB flashing works with the BMS connected, since the BMS no longer shares
+   line. All diagnostics go to `http://dalybms.local/log` instead.
+2. The BMS can stay connected during USB flashing, since it no longer shares
    GPIO3 with the USB bridge.
 
 At boot the ESP8266 ROM emits a short burst at 74880 baud on TX. The BMS ignores
@@ -144,5 +177,5 @@ it; this is harmless.
 ## Placement
 
 Keep the D1 Mini out of the battery compartment if the pack vents, and check
-WiFi signal at the intended spot: `http://<esp-ip>/status.json` reports `rssi`.
+WiFi signal at the intended spot: `http://dalybms.local/status.json` reports `rssi`.
 Anything worse than about −75 dBm will drop polls.

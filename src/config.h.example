@@ -16,8 +16,21 @@
 // the Home Assistant device id, so keep it unique per bridge.
 #define DEVICE_HOSTNAME "dalybms"
 
+// Answer mDNS queries for <DEVICE_HOSTNAME>.local (src/mdnslite.h): A record only,
+// no services. 0 turns it off; then use the IP or the router's DNS name.
+#define MDNS_RESPONDER 1
+
+// Password for POST /reboot (user "admin"). Sent over plain HTTP, so do not reuse
+// the OTA password. Leave undefined to disable the endpoint.
+#define WEB_ADMIN_PASSWORD "change-me-too"
+
+
 // Password required to push an over-the-air firmware update.
 #define OTA_PASSWORD    "change-me"
+
+// PIN for changing the BMS voltage limits (web page and MQTT). Required, there is no
+// default. Sent in clear over plain HTTP.
+#define SETTINGS_PIN    "0000"
 
 // How often to run one poll cycle over all six DALY commands, milliseconds.
 #define POLL_INTERVAL_MS 5000
@@ -67,36 +80,81 @@
 //
 // The broker user needs READ access to <MQTT_BASE_TOPIC>/mode/set.
 //
-// Storage needs D0 (GPIO16) wired to RST, like the low-voltage guard.
+// Normal and storage need D0 (GPIO16) wired to RST, like the low-voltage guard.
 
 // Mode of a board that has never been told one: "storage", "normal" or "high".
 // After that the mode is kept in flash.
 // #define POWER_DEFAULT_MODE "normal"
 
-// high: radio in modem sleep, state published this often.
-// #define POWER_HIGH_PUBLISH_S 60
+// high: radio in modem sleep, state published this often. The BMS is polled every
+// POWER_HIGH_POLL_S (and every POLL_INTERVAL_MS once the pack is at or below the BMS's
+// own low-voltage level, with STALE_AFTER_MS as the stale limit). Otherwise data is
+// stale after three missed polls. The MQTT keepalive is announced in CONNECT; the
+// broker marks the board offline after 1.5x it.
+// #define POWER_HIGH_PUBLISH_S 120
+// #define POWER_HIGH_POLL_S 120
+// #define POWER_HIGH_KEEPALIVE_S 60
+// POWER_HIGH_LIGHT_SLEEP 0 keeps the CPU awake (plain modem sleep).
+// #define POWER_HIGH_LIGHT_SLEEP 1
 
-// normal: state published this often, CPU and radio in light sleep once MQTT
-// has connected and caught up. The BMS is still polled every POWER_NORMAL_POLL_S
-// so the low-voltage guard keeps seeing data, and every POLL_INTERVAL_MS while
-// the guard is counting down.
-// POWER_NORMAL_LIGHT_SLEEP 0 keeps the CPU awake (plain modem sleep).
-// Listen interval is in beacons (~100 ms), 1..10, 0 = every DTIM. It needs NONOS
-// SDK 3.x (-D PIO_FRAMEWORK_ARDUINO_ESPRESSIF_SDK305 in platformio.ini); the
-// default SDK ignores it.
-// #define POWER_NORMAL_PUBLISH_S 900
-// #define POWER_NORMAL_POLL_S 60
-// #define POWER_NORMAL_LISTEN_INTERVAL 10
-// #define POWER_NORMAL_LIGHT_SLEEP 1
+// normal: the same wake, report and deep-sleep cycle as storage, every
+// POWER_NORMAL_INTERVAL_S. The BMS is only polled during the session, so its own
+// sleep timeout does not matter. Not online between reports: a mode command waits
+// for the next wake. If a report cannot get through it is retried after the
+// shorter of this and POWER_STORAGE_RETRY_S.
+// #define POWER_NORMAL_INTERVAL_S 900
+
+// The sleep timer runs fast, so the uptime total counts a planned sleep scaled by this,
+// per thousand. Adjust it by comparing uptime with a real clock over a few days.
+// #define POWER_SLEEP_CLOCK_PERMILLE 940
 
 // storage: radio off, one report per period. If a report cannot get through
 // (no WiFi, broker down) it is retried after POWER_STORAGE_RETRY_S. A bridge
-// that has just been powered up or switched to storage stays awake for
+// that has just been powered up or switched to normal or storage stays awake for
 // POWER_STORAGE_GRACE_S after reporting, as a window to change its mind or
 // flash it.
 // #define POWER_STORAGE_INTERVAL_S 86400
 // #define POWER_STORAGE_RETRY_S 10800
 // #define POWER_STORAGE_GRACE_S 120
+
+// --- Pack voltage profiles --------------------------------------------------
+//
+// Two sets of pack limits, selectable on the web page and over MQTT (the "Pack
+// voltage profile" select, or "profile" in <MQTT_BASE_TOPIC>/limits/set). All four BMS
+// pack levels are set per profile. In 0.1 V. Defaults shown.
+// Normal 14.2 - 11.0 V
+// #define PACK_NORMAL_HIGH_L1_DV  141 // 14.1 V
+// #define PACK_NORMAL_HIGH_L2_DV  142 // 14.2 V
+// #define PACK_NORMAL_LOW_L1_DV   111 // 11.1 V
+// #define PACK_NORMAL_LOW_L2_DV   110 // 11.0 V
+// Storage 13.2 - 12.0 V
+// #define PACK_STORAGE_HIGH_L1_DV 131 // 13.1 V
+// #define PACK_STORAGE_HIGH_L2_DV 132 // 13.2 V
+// #define PACK_STORAGE_LOW_L1_DV  121 // 12.1 V
+// #define PACK_STORAGE_LOW_L2_DV  120 // 12.0 V
+
+// --- BMS wake (S1) ----------------------------------------------------------
+//
+// Pin wired to the BMS's S1 wake pad through about 1k (docs/wiring.md). Shorting S1
+// to ground wakes the BMS, which storage mode needs because the BMS has usually
+// gone to sleep during the bridge's day-long sleep. The pin sits as an input except
+// during a pulse. 13 is D7 on the D1 Mini. Leave undefined to disable the feature.
+// #define BMS_WAKE_PIN 13
+// #define BMS_WAKE_PULSE_MS 300   // how long S1 is held low
+// #define BMS_WAKE_SETTLE_MS 500  // wait after a pulse before talking to the BMS
+// #define BMS_WAKE_GRACE_S 3      // silence at boot before the first pulse
+// #define BMS_WAKE_RETRY_S 10     // pulse again if the BMS is still silent
+// #define BMS_WAKE_MAX_PULSES 3   // per boot, the first one included
+
+// No WiFi for this long (sleeping included, kept across restarts) and every mode
+// tests for a network only once per interval instead of on its own cycle, so a
+// bridge stored out of range does not drain the pack. A power-up or a connection
+// starts the count again. High mode also sleeps once this long is up, which like the
+// other sleeping modes needs D0 (GPIO16) wired to RST to wake itself: without the
+// jumper a high-mode bridge would stay asleep until power-cycled, so set this to 0
+// (never give up) on such a board.
+// #define POWER_OFFLINE_GIVEUP_S 3600
+// #define POWER_OFFLINE_INTERVAL_S 86400
 
 // If the BMS has not answered for this long, reboot. 0 disables.
 #define BMS_WATCHDOG_MS 300000
@@ -128,11 +186,13 @@
 // inverter surge or a compressor start from parking the bridge.
 #define GUARD_TRIP_SECONDS 60
 
-// Once the guard has read the BMS's own low-voltage limit (0x59/0x5A) it trips
-// this far above it (and stands down this much higher still), instead of using the
-// fixed GUARD_TRIP_* / GUARD_RELEASE_* values, which then serve only as a fallback.
-// It also polls fast only when the weakest cell is within GUARD_NEAR_MV of that trip.
-#define GUARD_BMS_MARGIN_MV 50
+// Once the guard has read the BMS's own low-voltage cutoff (0x59/0x5A, the lower of
+// its two levels) it trips GUARD_BMS_MARGIN_MV from it -- negative is below, so the
+// BMS's whole range stays usable -- and stands down GUARD_BMS_RELEASE_MV above the
+// trip, instead of using the fixed GUARD_TRIP_* / GUARD_RELEASE_* values, which then
+// serve only as a fallback. It polls fast only when the weakest cell is within
+// GUARD_NEAR_MV of that trip.
+#define GUARD_BMS_MARGIN_MV -100
 #define GUARD_BMS_RELEASE_MV 200
 #define GUARD_NEAR_MV 150
 

@@ -33,6 +33,46 @@ void buildRequest(uint8_t cmd, uint8_t* out) {
     out[FRAME_LEN - 1] = checksum(out, FRAME_LEN - 1);
 }
 
+namespace {
+
+bool inRange(const Thresholds& t, uint16_t lo, uint16_t hi) {
+    const uint16_t v[4] = {t.high_l1, t.high_l2, t.low_l1, t.low_l2};
+    for (uint16_t x : v) {
+        if (x < lo || x > hi) return false;
+    }
+    const uint16_t lowest_high = t.high_l1 < t.high_l2 ? t.high_l1 : t.high_l2;
+    const uint16_t highest_low = t.low_l1 > t.low_l2 ? t.low_l1 : t.low_l2;
+    return lowest_high > highest_low;
+}
+
+} // namespace
+
+bool validCellThresholds(const Thresholds& t) {
+    return inRange(t, CELL_LIMIT_MIN_MV, CELL_LIMIT_MAX_MV);
+}
+
+bool validPackThresholds(const Thresholds& t) {
+    return inRange(t, PACK_LIMIT_MIN_DV, PACK_LIMIT_MAX_DV);
+}
+
+void buildThresholdWrite(uint8_t cmd, const Thresholds& t, uint8_t* out) {
+    buildRequest(cmd, out);
+    const uint16_t v[4] = {t.high_l1, t.high_l2, t.low_l1, t.low_l2};
+    for (uint8_t i = 0; i < 4; i++) {
+        out[4 + i * 2] = static_cast<uint8_t>(v[i] >> 8);
+        out[5 + i * 2] = static_cast<uint8_t>(v[i] & 0xFF);
+    }
+    out[FRAME_LEN - 1] = checksum(out, FRAME_LEN - 1);
+}
+
+void buildSleepTimeoutWrite(const uint8_t current[8], uint16_t timeout_s, uint8_t* out) {
+    buildRequest(CMD_SET_SLEEP_CFG, out);
+    for (uint8_t i = 0; i < 8; i++) out[4 + i] = current[i];
+    out[9] = static_cast<uint8_t>(timeout_s >> 8);
+    out[10] = static_cast<uint8_t>(timeout_s & 0xFF);
+    out[FRAME_LEN - 1] = checksum(out, FRAME_LEN - 1);
+}
+
 bool FrameDecoder::prefixPlausible() const {
     if (len_ >= 1 && buf_[0] != START_BYTE) return false;
     // buf_[1] is the address byte and is intentionally not checked; see the
@@ -75,20 +115,32 @@ bool FrameDecoder::feed(uint8_t b) {
     return false;
 }
 
+static bool allZero(const uint8_t* d) {
+    for (uint8_t i = 0; i < 8; i++) {
+        if (d[i] != 0) return false;
+    }
+    return true;
+}
+
 uint8_t applyFrame(const uint8_t* frame, BmsData& out) {
     const uint8_t cmd = frame[2];
     const uint8_t* d = frame + 4; // 8 payload bytes
 
     switch (cmd) {
-    case CMD_PACK:
+    case CMD_PACK: {
+        // A half-awake BMS answers with an all-zero payload, which would decode
+        // as 0 V and -3000 A (raw current 0 - 30000). Reject it untouched.
+        if (allZero(d)) return 0;
         out.pack_voltage_dv = be16(d);
         // d[2..3] is the "gather voltage", which duplicates the pack voltage on
         // most models. Ignored.
         out.pack_current_da = static_cast<int16_t>(static_cast<int32_t>(be16(d + 4)) - 30000);
         out.soc_dpct = be16(d + 6);
         return cmd;
+    }
 
     case CMD_MINMAX_CELL:
+        if (allZero(d)) return 0; // half-awake, same as 0x90
         out.max_cell_mv = be16(d);
         out.max_cell_idx = d[2];
         out.min_cell_mv = be16(d + 3);
@@ -96,6 +148,7 @@ uint8_t applyFrame(const uint8_t* frame, BmsData& out) {
         return cmd;
 
     case CMD_TEMP:
+        if (allZero(d)) return 0; // raw 0 would read as -40 C
         out.max_temp_c = static_cast<int16_t>(static_cast<int16_t>(d[0]) - 40);
         out.max_temp_idx = d[1];
         out.min_temp_c = static_cast<int16_t>(static_cast<int16_t>(d[2]) - 40);
@@ -103,6 +156,10 @@ uint8_t applyFrame(const uint8_t* frame, BmsData& out) {
         return cmd;
 
     case CMD_MOS:
+        // Zero state, both MOSFETs off, life counter 0 and 0 mAh left is what a
+        // half-awake BMS sends; a real pack that empty is not worth the risk of
+        // publishing 0 Ah and SOC over good values.
+        if (allZero(d)) return 0;
         out.charge_state = d[0];
         out.charge_mos = d[1] != 0;
         out.discharge_mos = d[2] != 0;
@@ -150,13 +207,23 @@ uint8_t applyFrame(const uint8_t* frame, BmsData& out) {
 
     // Payload is high L1, high L2, low L1, low L2, each big-endian.
     case CMD_CELL_THRESH:
+        out.cell_high_l1_mv = be16(d);
+        out.cell_high_l2_mv = be16(d + 2);
         out.cell_low_l1_mv = be16(d + 4);
         out.cell_low_l2_mv = be16(d + 6);
         return cmd;
 
     case CMD_PACK_THRESH:
+        out.pack_high_l1_dv = be16(d);
+        out.pack_high_l2_dv = be16(d + 2);
         out.pack_low_l1_dv = be16(d + 4);
         out.pack_low_l2_dv = be16(d + 6);
+        return cmd;
+
+    case CMD_SLEEP_CFG:
+        for (uint8_t i = 0; i < 8; i++) out.sleep_raw[i] = d[i];
+        out.sleep_timeout_s = be16(d + 5);
+        out.have_sleep = true;
         return cmd;
 
     default:

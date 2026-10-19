@@ -68,20 +68,28 @@ bool below(const daly::BmsData& d, uint16_t cell_mv, uint16_t pack_dv) {
     return false;
 }
 
-// Where the BMS itself gives up. Its two levels are used as reported, taking the
-// higher so we are clear of the earlier one. A reply that is zero or implausible
-// (an old firmware answering with something else entirely) is ignored and the
+// Where the BMS itself cuts off: the lower of its two levels (the other is only
+// a warning). The guard trips GUARD_BMS_MARGIN_MV from that, normally below it, so
+// the BMS gets to use its whole range and the guard is only the backstop for the
+// bridge's own drain after the cutoff. A reply that is zero or implausible (an
+// old firmware answering with something else entirely) is ignored and the
 // configured thresholds apply.
 constexpr uint16_t kMinPlausibleCellMv = 2000;
 constexpr uint16_t kMaxPlausibleCellMv = 3600;
 
+uint16_t lowerNonZero(uint16_t a, uint16_t b) {
+    if (a == 0) return b;
+    if (b == 0) return a;
+    return a < b ? a : b;
+}
+
 uint16_t bmsCellLimitMv(const daly::BmsData& d) {
-    const uint16_t lim = d.cell_low_l1_mv > d.cell_low_l2_mv ? d.cell_low_l1_mv : d.cell_low_l2_mv;
+    const uint16_t lim = lowerNonZero(d.cell_low_l1_mv, d.cell_low_l2_mv);
     return lim >= kMinPlausibleCellMv && lim <= kMaxPlausibleCellMv ? lim : 0;
 }
 
 uint16_t bmsPackLimitDv(const daly::BmsData& d, uint16_t cell_limit_mv) {
-    const uint16_t lim = d.pack_low_l1_dv > d.pack_low_l2_dv ? d.pack_low_l1_dv : d.pack_low_l2_dv;
+    const uint16_t lim = lowerNonZero(d.pack_low_l1_dv, d.pack_low_l2_dv);
     if (lim == 0 || d.cell_count == 0) return 0;
     // The pack limit has to be consistent with the cell limit or one of them
     // was misread; trust neither the pack number nor the cell number alone then.
@@ -104,8 +112,9 @@ Thresholds thresholds(const daly::BmsData& d) {
         return {GUARD_TRIP_CELL_MV, GUARD_TRIP_PACK_DV, GUARD_RELEASE_CELL_MV,
                 GUARD_RELEASE_PACK_DV, false};
     }
-    const uint16_t margin_dv = static_cast<uint16_t>(GUARD_BMS_MARGIN_MV * d.cell_count / 100U);
-    const uint16_t hyst_dv = static_cast<uint16_t>(GUARD_BMS_RELEASE_MV * d.cell_count / 100U);
+    // Signed: the margin is normally negative (trip below the cutoff).
+    const int32_t margin_dv = static_cast<int32_t>(GUARD_BMS_MARGIN_MV) * d.cell_count / 100;
+    const int32_t hyst_dv = static_cast<int32_t>(GUARD_BMS_RELEASE_MV) * d.cell_count / 100;
     return {static_cast<uint16_t>(cell + GUARD_BMS_MARGIN_MV),
             static_cast<uint16_t>(pack + margin_dv),
             static_cast<uint16_t>(cell + GUARD_BMS_MARGIN_MV + GUARD_BMS_RELEASE_MV),
@@ -237,7 +246,16 @@ void loop(const daly::BmsData& d, bool valid) {
     const Thresholds t = thresholds(d);
     status_.limit_cell_mv = t.trip_cell_mv;
     status_.limit_from_bms = t.from_bms;
-    status_.near_limit = d.min_cell_mv > 0 && d.min_cell_mv <= t.trip_cell_mv + GUARD_NEAR_MV;
+    // Fast polling starts when the pack reaches the BMS's own low-voltage level (the
+    // guard's trip sits below it), not before: above that the guard has nothing to do
+    // and the BMS can be polled slowly. Without BMS limits, fall back to a margin
+    // above the configured trip.
+    if (t.from_bms) {
+        const uint16_t bms_cell = bmsCellLimitMv(d);
+        status_.near_limit = below(d, bms_cell, bmsPackLimitDv(d, bms_cell));
+    } else {
+        status_.near_limit = d.min_cell_mv > 0 && d.min_cell_mv <= t.trip_cell_mv + GUARD_NEAR_MV;
+    }
 
     // Hysteresis: it takes the trip threshold to start counting, but the higher
     // release threshold to stand down, so a pack hovering on the line does not

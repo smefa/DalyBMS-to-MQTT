@@ -4,10 +4,12 @@ The bridge speaks MQTT 3.1.1 inside binary WebSocket frames (subprotocol
 `mqtt`), over `wss://` by default. That lets it reach a broker through a reverse
 proxy on port 443, which is the usual way to expose Home Assistant over HTTPS.
 
-It publishes everything, and takes exactly one command back: the power mode
-(below). The broker user therefore needs **write** access to `dalybms/#` and
-**read** access to `dalybms/mode/set`. Without the read access the bridge logs
-`broker refused subscribe` and carries on, but the mode cannot be changed.
+It publishes everything, and takes three kinds of command back: the power mode, the
+BMS voltage limits and the pack voltage profile (all below). The broker user
+therefore needs **write** access to `dalybms/#` and `homeassistant/#` (the retained
+discovery configs) and **read** access to `dalybms/mode/set`, `dalybms/limits/set`
+and `dalybms/profile/set`. Without the read access the bridge logs `broker refused
+a subscribe` and carries on, but those commands cannot be received.
 
 ## Topics
 
@@ -16,12 +18,60 @@ With `MQTT_BASE_TOPIC "dalybms"`:
 | Topic | Direction | Retained | Content |
 |---|---|---|---|
 | `dalybms/status` | out | yes | `online`; the broker publishes `offline` as the last will |
-| `dalybms/state` | out | storage mode only | one JSON document with every value, including `mode` |
+| `dalybms/state` | out | normal and storage modes | one JSON document with every value, including `mode` |
 | `dalybms/mode/set` | **in** | should be | `storage`, `normal` or `high` (any case) |
+| `dalybms/limits` | out | yes | the BMS's 8 voltage limits as JSON, sent when they change |
+| `dalybms/limits/set` | **in** | **never** | JSON command to change the limits (below) |
+| `dalybms/limits/result` | out | no | `queued`, then `done` / `unchanged` / `mismatch`; or why it was refused |
+| `dalybms/profile/set` | **in** | no | `normal` or `storage`, the bare profile name (see [Pack voltage profiles](#pack-voltage-profiles)) |
 | `homeassistant/<component>/dalybms/<id>/config` | out | yes | MQTT discovery |
 
 The state document is also sent immediately whenever the low-voltage guard
 changes state, or the mode changes between normal and high.
+
+## Changing the BMS voltage limits
+
+Publish JSON to `dalybms/limits/set` (not retained: a retained command would be
+replayed on every reconnect). `pin` is required; send fields of **one**
+group (cell, pack or sleep) per command. Fields you leave out keep their current value.
+
+```json
+{"pin":"your-pin","cell_high_l1_mv":3650,"cell_high_l2_mv":3700,"cell_low_l1_mv":2800,"cell_low_l2_mv":2600}
+{"pin":"your-pin","pack_high_l1_v":58.4,"pack_low_l1_v":44.0}
+```
+
+A third group, `{"pin":"your-pin","sleep_timeout_s":62000}`, sets the BMS sleep timeout
+(10-65535 s). It rewrites the BMS's combined sleep/current-wave frame (0x13) with every
+other byte copied from the last reading, so the sleep enable and current wave are kept.
+That frame layout comes from a forum capture, not the spec or this pack; check the
+read-back result the first time.
+
+Keys and units are those of `dalybms/limits` and `status.json`: cells in mV, packs in V.
+Level order is high L1, high L2, low L1, low L2. Ranges are checked (cell 1500-4500 mV,
+pack 5-100 V) and every high level must be above every low level.
+
+The PIN is `SETTINGS_PIN` in `config.h`. There is no default, and the build fails
+without it. Five wrong PINs lock
+changes for 60 s. The bridge sends the change to the BMS between readings, then reads
+the limits back and reports on `dalybms/limits/result`. `mismatch` means the BMS did not
+take the values. A change that equals what the BMS already holds is not written
+(`unchanged`), so the BMS memory is not worn by repeats. The web dashboard has the same
+form under "Change BMS voltage limits"; it sends the PIN over plain HTTP.
+
+### Pack voltage profiles
+
+Two ready-made sets of pack limits, set in `config.h` (`PACK_NORMAL_{HIGH,LOW}_{L1,L2}_DV` and
+`PACK_STORAGE_...`, in 0.1 V): **normal** 14.2-11.0 V and **storage** 13.2-12.0 V as L2, with
+L1 0.1 V inside by default (normal: high 14.1 / 14.2, low 11.1 / 11.0).
+
+- Home Assistant: the **Pack voltage profile** select. It publishes the bare name to
+  `dalybms/profile/set` (not retained) with no PIN, so the broker login is the only gate,
+  as for the power mode. The broker user needs read access to that topic. The current
+  profile is `pack_profile` in the state document (`normal`, `storage`, `custom` or `unknown`).
+- With a PIN: `{"pin":"your-pin","profile":"storage"}` to `dalybms/limits/set`.
+- Web page: the Normal / Storage buttons under "Change BMS settings" (PIN required).
+
+Outcomes are reported on `dalybms/limits/result` like any other limits change.
 
 ## Power modes
 
@@ -32,31 +82,29 @@ survives power loss; a board that has never been told starts in `normal`
 
 | Mode | Radio | Reports | Dashboard / OTA |
 |---|---|---|---|
-| `high` | on, modem sleep | every 60 s | ~0.1–0.3 s latency |
-| `normal` | on, light sleep (once MQTT has connected and caught up) | every 15 min | ~1 s latency, sometimes a few |
+| `high` | on, light sleep (once MQTT has connected and caught up) | every 2 min | ~1 s latency, sometimes a few |
+| `normal` | **off** between reports (deep sleep) | every 15 min | only for a short window after each report |
 | `storage` | **off** | once a day | only for a short window after each report |
 
-Intervals are `POWER_*` settings in `config.h`. I have not measured the current
-draw of any of them on a real board; expect roughly 20 mA for high, a few mA for
-normal and well under 1 mA for storage, depending on the regulator and USB chip
-on your board.
+Intervals are `POWER_*` settings in `config.h`. Current draw has not been measured
+on a real board. Expect roughly 20 mA for high and well under 1 mA for normal and
+storage, depending on the regulator and USB chip on your board; these are estimates.
 
-**Normal** still polls the BMS every 60 s (`POWER_NORMAL_POLL_S`) between
-reports, because the low-voltage guard needs a stream of readings to act on.
-While the guard is counting down it polls every `POLL_INTERVAL_MS` instead, so a
-passing sag gets cleared by fresh readings rather than tripping it.
-
-Between polls the CPU light-sleeps (`POWER_NORMAL_LIGHT_SLEEP`) and the radio wakes
-for the access point's DTIM beacons. Light sleep starts only 10 s after MQTT has
-settled: connected, discovery sent, first state out. The TLS handshake is a long
-blocking call that took 40 s under a slow radio on the bench, long enough to trip
-the watchdog. And entering light sleep during the burst of publishes after a
-connect gave a Soft WDT reset in roughly one boot in five to ten. A dropped connection goes
-back to full speed until it has settled again.
-
-`POWER_NORMAL_LISTEN_INTERVAL` would stretch the radio's wakeups past DTIM, but the
-core only applies it on NONOS SDK 3.x
-(`-D PIO_FRAMEWORK_ARDUINO_ESPRESSIF_SDK305`). The default SDK 2.2.x ignores it.
+`high` is the only mode that is online all the time. Its CPU light-sleeps between
+polls (`POWER_HIGH_LIGHT_SLEEP`) and the radio wakes for the access point's DTIM
+beacons. Light sleep starts only 10 s after MQTT has settled (connected, discovery
+sent, first state out): the TLS handshake is a long blocking call that took 40 s
+under a slow radio on the bench, enough to trip the watchdog. A dropped connection
+goes back to full speed until it has settled again. A listen interval would stretch
+the radio's wakeups, but the core only applies it on NONOS SDK 3.x
+(`-D PIO_FRAMEWORK_ARDUINO_ESPRESSIF_SDK305`), so it is not used.
+ `normal` and `storage` are the
+same wake, report and deep-sleep cycle, 15 minutes (`POWER_NORMAL_INTERVAL_S`) and
+a day (`POWER_STORAGE_INTERVAL_S`) apart. The BMS is only polled during the
+session (every `POLL_INTERVAL_MS`), so its own sleep timeout does not matter and
+there are no idle pings or keepalive to tune. A session also stays up while the
+low-voltage guard is counting down, so a passing sag is cleared by fresh readings
+rather than tripping it.
 
 ### Memory is the tight resource
 
@@ -65,31 +113,37 @@ dips to about 3.4 kB. Anything that asks for memory then can crash the board wit
 `Exception 29` or `Unhandled C++ exception: OOM`. A dashboard that fires a request
 every 2 s while the answers take seconds does exactly that, so the dashboard now
 polls one request at a time, every 10 s outside high mode. If you add features,
-watch `free_heap` in `/status.json`, or `http://<ip>/heap`, which answers even when
+watch `free_heap` in `/status.json`, or `http://dalybms.local/heap`, which answers even when
 the heap is too low to build the JSON.
 
-**Storage** is deep sleep. A day is longer than the chip can sleep in one go, so it
+**Storage and normal** are deep sleep. A day is longer than the chip can sleep in one go, so it
 sleeps in chunks of an hour or so and only brings up the radio after the last
 one. On that wake it connects, publishes the state (retained, so a restarted Home
 Assistant still has numbers), sends discovery, reads any waiting mode command,
 disconnects cleanly and sleeps again. A clean disconnect leaves `status` as
-`online`; the entities expire after twice the storage period
-(`POWER_STORAGE_INTERVAL_S`) so a bridge that died asleep does not look healthy
+`online`; the entities expire after twice the sleep period
+(`POWER_NORMAL_INTERVAL_S` or `POWER_STORAGE_INTERVAL_S`) so a bridge that died asleep does not look healthy
 for ever. If a report cannot get through it is retried after
-`POWER_STORAGE_RETRY_S` (3 h).
+`POWER_STORAGE_RETRY_S` (3 h). After `POWER_OFFLINE_GIVEUP_S` (1 h) without WiFi, in
+any mode, it tests for a network only once per `POWER_OFFLINE_INTERVAL_S` (24 h); a
+connection or a power-up starts the count again.
 
-Things to know about storage:
+Things to know about normal and storage:
 
 - **Needs D0 wired to RST**, like the low-voltage guard ([wiring](wiring.md)).
   Without it the bridge goes to sleep and never wakes until power-cycled, and
   then goes straight back to sleep.
-- **Switching out of storage takes up to a day.** The command sits retained on the
+- **Switching out takes up to a full period (15 min or a day).** The command sits retained on the
   broker (Home Assistant retains it) until the next wake. To act sooner, press the
   reset button or power-cycle the bridge: a storage bridge that did not wake from
   a timer stays up for `POWER_STORAGE_GRACE_S` (2 min) after reporting, long
   enough to collect the command, or to flash over the air.
-- **Switching into storage is immediate:** the bridge saves the mode, restarts,
+- **Switching into normal or storage is immediate:** the bridge saves the mode, restarts,
   reports once and sleeps.
+- **Waking the BMS:** with `BMS_WAKE_PIN` set and S1 wired ([wiring](wiring.md#bms-wake-s1)),
+  each boot, in every mode, pulses the BMS wake pad before polling it, and again every
+  10 s (up to 3 pulses) while the BMS stays silent. Without it, a BMS that has gone
+  to sleep may not answer and the report goes out without readings.
 - The low-voltage guard only sees the pack during those short wakes. Between them
   the bridge draws very little, which is the point, but it is not watching.
 - Retained commands are re-delivered on every connect, which is harmless: asking
@@ -111,9 +165,11 @@ Things to know about storage:
 | **Seconds since BMS frame** | s | diagnostic |
 | **Low-voltage guard** | | `disabled`, `normal`, `counting`, `recheck` |
 | Guard seconds spent low | s | diagnostic |
-| WiFi signal, uptime | dBm, s | diagnostic |
+| WiFi signal, uptime | dBm, text ("45 m", "3 h 20 m", "2 d 4 h 24 m") | diagnostic |
+| IP address | | diagnostic; the way to find the board when `dalybms.local` does not resolve |
 | Cell 1…N | mV | one per cell the BMS reports, diagnostic |
 | **Power mode** | | select: `storage`, `normal`, `high` |
+| **Pack voltage profile** | | select: `normal`, `storage`; shows none for `custom` or `unknown` |
 
 ### Read "BMS data fresh" before trusting anything else
 
@@ -187,12 +243,14 @@ The fingerprint changes at every certificate renewal (Let's Encrypt: roughly
 every 60 days), after which the bridge stops connecting until you reflash or
 update it over the air.
 
-TLS needs about 20 kB of RAM on the ESP8266. Watch `free_heap` in
-`/status.json`; if it falls below ~10 kB, TLS handshakes will start to fail.
+With TLS up, the ESP8266 has about 6 kB of heap left, and the handshake dips to about
+3.4 kB (see [Memory is the tight resource](#memory-is-the-tight-resource)). The
+WebSocket library's TLS receive buffer is cut to 2 kB to make that room; see
+`lib/WebSockets/PATCH.md`. Watch `free_heap` in `/status.json`.
 
 ## Troubleshooting
 
-All firmware messages are at `http://<esp-ip>/log` (UART0 belongs to the BMS).
+All firmware messages are at `http://dalybms.local/log` (UART0 belongs to the BMS).
 
 | Log line | Meaning |
 |---|---|
@@ -200,3 +258,8 @@ All firmware messages are at `http://<esp-ip>/log` (UART0 belongs to the BMS).
 | `mqtt: broker refused connection, code 4/5` | wrong or unauthorised broker credentials |
 | `websocket up` but never `connected` | proxy is not forwarding the `mqtt` subprotocol, or the path is wrong |
 | nothing after `mqtt: wss://…` | TLS or DNS failure, or no heap left |
+
+## References
+
+- [MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html)
+- [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)

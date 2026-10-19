@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="540" viewBox="0 0 820 540" role="img" font-family="Segoe UI, Arial, sans-serif" font-size="13">
+  <title>Connection diagram: 4S pack, 12 V to 5 V buck converter, DALY BMS and Wemos D1 Mini</title>
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0969da"/>
+    </marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a7f37"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.5; }
+    .txt { fill: #1f2328; }
+    .small { font-size: 11px; fill: #1f2328; }
+    .note { font-size: 11px; fill: #1f2328; }
+    .red { stroke: #cf222e; stroke-width: 2.5; fill: none; }
+    .blk { stroke: #24292f; stroke-width: 2.5; fill: none; }
+    .blu { stroke: #0969da; stroke-width: 2; fill: none; }
+    .grn { stroke: #1a7f37; stroke-width: 2; fill: none; }
+    .net { stroke: #8250df; stroke-width: 2; fill: none; }
+    .opt { stroke: #6e7781; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+    .lead { stroke: #8c959f; stroke-width: 2; fill: none; }
+  </style>
+  <rect width="820" height="540" fill="#ffffff"/>
+
+  <!-- Battery pack -->
+  <rect class="box" x="40" y="40" width="180" height="100" rx="8"/>
+  <text class="txt" x="130" y="82" text-anchor="middle" font-weight="600">4S LiFePO4 pack</text>
+  <text class="small" x="130" y="102" text-anchor="middle">12 V</text>
+
+  <!-- Pack to buck converter, taken from the pack terminals -->
+  <line class="red" x1="220" y1="60" x2="300" y2="60"/>
+  <line class="blk" x1="220" y1="100" x2="300" y2="100"/>
+  <text class="small" x="260" y="54" text-anchor="middle">+12 V</text>
+  <text class="small" x="260" y="118" text-anchor="middle">B-</text>
+
+  <!-- Buck converter -->
+  <rect class="box" x="300" y="40" width="180" height="80" rx="8"/>
+  <text class="txt" x="390" y="78" text-anchor="middle" font-weight="600">12 V to 5 V</text>
+  <text class="small" x="390" y="96" text-anchor="middle">buck converter</text>
+
+  <!-- Buck converter to D1 Mini power pins -->
+  <line class="red" x1="420" y1="120" x2="420" y2="220"/>
+  <line class="blk" x1="460" y1="120" x2="460" y2="220"/>
+  <text class="small" x="412" y="175" text-anchor="end">5 V</text>
+  <text class="small" x="468" y="175" text-anchor="start">GND</text>
+
+  <!-- Wemos D1 Mini -->
+  <rect class="box" x="300" y="220" width="200" height="240" rx="10"/>
+  <text class="txt" x="400" y="246" text-anchor="middle" font-weight="600">Wemos D1 Mini</text>
+  <text class="small" x="400" y="264" text-anchor="middle">D0 wired to RST</text>
+  <text class="small" x="312" y="354">GND</text>
+  <text class="small" x="312" y="374">D5</text>
+  <text class="small" x="312" y="394">TX</text>
+  <text class="small" x="488" y="434" text-anchor="end">D7</text>
+
+  <!-- DALY BMS -->
+  <rect class="box" x="40" y="300" width="180" height="140" rx="8"/>
+  <text class="txt" x="54" y="322" font-weight="600">DALY BMS</text>
+  <text class="small" x="54" y="338">UART port</text>
+  <text class="small" x="212" y="354" text-anchor="end">GND</text>
+  <text class="small" x="212" y="374" text-anchor="end">BMS TX</text>
+  <text class="small" x="212" y="394" text-anchor="end">BMS RX</text>
+  <circle cx="100" cy="440" r="4" fill="#6e7781"/>
+  <text class="small" x="100" y="428" text-anchor="middle">S1</text>
+
+  <!-- Cell leads from pack to BMS -->
+  <line class="lead" x1="130" y1="140" x2="130" y2="300"/>
+  <text class="small" x="140" y="222">cell leads</text>
+
+  <!-- UART wires: pin 1 GND, pin 5 BMS TX to D5, pin 6 BMS RX from D1 TX -->
+  <line class="blk" x1="220" y1="350" x2="300" y2="350"/>
+  <line class="blu" x1="220" y1="370" x2="300" y2="370" marker-end="url(#ab)"/>
+  <line class="grn" x1="300" y1="390" x2="220" y2="390" marker-end="url(#ag)"/>
+
+  <!-- Optional BMS wake pulse: D7 through 1 kOhm to S1 -->
+  <path class="opt" d="M500 430 H540 V500 H100 V474"/>
+  <line class="opt" x1="100" y1="456" x2="100" y2="440"/>
+  <rect x="92" y="456" width="16" height="18" fill="#ffffff" stroke="#6e7781" stroke-width="1.5"/>
+  <text class="small" x="116" y="469">1 kΩ</text>
+  <text class="small" x="320" y="520" text-anchor="middle">Optional: BMS wake pulse, D7 through 1 kΩ to S1</text>
+
+  <!-- WiFi to Home Assistant -->
+  <line class="net" x1="500" y1="290" x2="580" y2="290"/>
+  <text class="small" x="540" y="282" text-anchor="middle">WiFi</text>
+  <rect class="box" x="580" y="250" width="200" height="80" rx="8"/>
+  <text class="txt" x="680" y="282" text-anchor="middle" font-weight="600">Home Assistant</text>
+  <text class="small" x="680" y="300" text-anchor="middle">MQTT over wss://</text>
+
+  <!-- Legend -->
+  <rect x="580" y="60" width="220" height="150" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text class="txt" x="592" y="80" font-weight="600">Legend</text>
+  <line class="red" x1="592" y1="100" x2="622" y2="100"/>
+  <text class="small" x="630" y="104">12 V or 5 V supply</text>
+  <line class="blk" x1="592" y1="122" x2="622" y2="122"/>
+  <text class="small" x="630" y="126">Ground, common to all</text>
+  <line class="blu" x1="592" y1="144" x2="622" y2="144"/>
+  <text class="small" x="630" y="148">BMS replies (BMS TX to D5)</text>
+  <line class="grn" x1="592" y1="166" x2="622" y2="166"/>
+  <text class="small" x="630" y="170">Requests (D1 TX to BMS RX)</text>
+  <line class="opt" x1="592" y1="188" x2="622" y2="188"/>
+  <text class="small" x="630" y="192">Optional wake pulse</text>
+
+  <!-- Notes -->
+  <text class="note" x="580" y="340" font-weight="600">Notes</text>
+  <text class="note" x="580" y="358">Feed 12 V from the pack terminals</text>
+  <text class="note" x="580" y="374">(ahead of the BMS MOSFETs).</text>
+  <text class="note" x="580" y="396">Do not power from the BMS UART.</text>
+  <text class="note" x="580" y="412">UART pins 2, 3 and 4 are not used.</text>
+  <text class="note" x="580" y="428">Keep both grounds common.</text>
+</svg>

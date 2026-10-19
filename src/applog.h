@@ -1,4 +1,4 @@
-// In-RAM ring buffer of log lines, served at http://<esp-ip>/log.
+// In-RAM ring buffer of log lines, served at http://dalybms.local/log.
 //
 // UART0 TX (GPIO1) is wired to the BMS, so printing to Serial would inject garbage into
 // the DALY bus. Nothing in this firmware may write to Serial.
@@ -8,7 +8,7 @@
 
 namespace applog {
 
-constexpr uint8_t LINES = 32;
+constexpr uint8_t LINES = 16;
 constexpr uint8_t LINE_LEN = 80;
 
 void logf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
