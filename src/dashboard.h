@@ -160,7 +160,8 @@ footer a{color:var(--mut)}
 <dialog id="pind"><form method="dialog" id="pinf">
   <div style="margin-bottom:8px" id="pinq">Enter PIN to change BMS settings</div>
   <input id="pin" type="password" inputmode="numeric" autocomplete="off">
-  <div class="btns"><button value="ok">OK</button><button value="cancel" formnovalidate>Cancel</button></div>
+  <div id="pinmsg" style="margin-top:8px;font-size:13px;color:var(--mut)"></div>
+  <div class="btns"><button value="ok" id="pinok">OK</button><button value="cancel" id="pinx" formnovalidate>Cancel</button></div>
 </form></dialog>
 
 <div class="card">
@@ -208,8 +209,9 @@ function render(s){
     var e=$(p[0]);e.textContent=p[1]?'ON':'OFF';e.className='pill tog '+(p[1]?'on':'off');
     mosNow[p[0]]=!!p[1]});
   if(mosWant){
-    if(mosNow[mosWant.id]==mosWant.on){$('mmsg').textContent='';mosWant=null}
-    else if(s.limits.write=='mismatch'){$('mmsg').textContent='The BMS did not switch it.';mosWant=null}
+    if(mosNow[mosWant.id]==mosWant.on)mosEnd(mosWant.label+' is now '+(mosWant.on?'ON':'OFF'),true);
+    else if(s.limits.write=='mismatch')mosEnd('The BMS did not switch it.',false);
+    else if(Date.now()-mosWant.t>40000)mosEnd('No confirmation from the BMS yet.',false);
   }
   $('rem').textContent=(s.status.remaining_mah/1000).toFixed(1)+' Ah';
   $('cyc').textContent=s.status.cycles;
@@ -290,25 +292,50 @@ function setProfile(name){saveLimits('profile',name)}
 // Click a MOS pill to switch it. Asks for the PIN, then the pill follows what the BMS
 // reports on the next readings, not what was clicked.
 var mosNow={},mosWant=null;
+// Progress is shown in the PIN box itself: it stays open from the PIN to the outcome.
+function mosShow(t){$('mmsg').textContent=t;$('pinmsg').textContent=t}
+function mosEnd(t,ok){
+  mosWant=null;mosShow(t);
+  if(ok){setTimeout(function(){if(!mosWant)$('pind').close()},1200)}
+  else{$('pin').style.display='none';$('pinok').style.display='none';$('pinx').textContent='Close'}
+}
 function toggleMos(field,id){
-  if(!(id in mosNow))return;
-  var on=!mosNow[id];
-  askPin(function(pin){
+  if(!(id in mosNow)||mosWant)return;
+  var on=!mosNow[id],label=(field=='charge_mos'?'Charge':'Discharge')+' MOS';
+  var d=$('pind'),f=$('pinf');
+  $('pinq').textContent='Enter PIN to switch '+label.toLowerCase()+' '+(on?'on':'off');
+  $('pin').value='';$('pinmsg').textContent='';
+  $('pin').style.display='';$('pinok').style.display='';$('pinx').textContent='Cancel';
+  f.onsubmit=function(e){
+    if(!e.submitter||e.submitter.value!='ok')return;
+    e.preventDefault();
+    var v=$('pin').value;if(!v)return;
     var b=new URLSearchParams();
-    b.set(field,on?'on':'off');b.set('pin',pin);
-    $('mmsg').textContent='sending...';
+    b.set(field,on?'on':'off');b.set('pin',v);
+    $('pinok').disabled=true;$('pin').disabled=true;
+    $('pinmsg').textContent='sending...';
     fetch('/limits',{method:'POST',body:b})
       .then(function(r){return r.text().then(function(t){
-        mosWant=r.status==202?{id:id,on:on}:null;
-        $('mmsg').textContent=r.status==202?'Switching '+(field=='charge_mos'?'charge':'discharge')+' MOS '+(on?'on':'off')+'...':t.trim();
+        if(r.status==202){
+          mosWant={id:id,on:on,t:Date.now(),label:label};
+          mosShow('Switching '+label+' '+(on?'on':'off')+'...');
+          $('pinx').textContent='Close';
+        }else{
+          $('pinmsg').textContent=t.trim();
+          $('pinok').disabled=false;$('pin').disabled=false;$('pin').value='';$('pin').focus();
+        }
       })})
-      .catch(function(){$('mmsg').textContent='request failed'});
-  },'Enter PIN to switch the '+(field=='charge_mos'?'charge':'discharge')+' MOSFET '+(on?'on':'off'));
+      .catch(function(){$('pinmsg').textContent='request failed';$('pinok').disabled=false;$('pin').disabled=false});
+  };
+  d.showModal();
+  $('pin').focus();
 }
 function askPin(cb,text){
   var d=$('pind'),f=$('pinf');
   $('pinq').textContent=text||'Enter PIN to change BMS settings';
-  $('pin').value='';
+  $('pin').value='';$('pinmsg').textContent='';
+  $('pin').disabled=false;$('pinok').disabled=false;
+  $('pin').style.display='';$('pinok').style.display='';$('pinx').textContent='Cancel';
   f.onsubmit=function(e){var v=$('pin').value;
     if(e.submitter&&e.submitter.value=='ok'&&v)setTimeout(function(){cb(v)},0)};
   d.showModal();
@@ -340,7 +367,7 @@ function postLimits(b){
 var every=2000;
 function poll(){
   fetch('/status.json',{cache:'no-store'}).then(function(r){return r.json()})
-    .then(function(s){render(s);every=(s.mode=='high')?2000:10000})
+    .then(function(s){render(s);every=(s.mode=='high'||mosWant)?(mosWant?1500:2000):10000})
     .catch(function(){
       $('dot').style.background='var(--bad)';
       $('meta').textContent='cannot reach the ESP';
