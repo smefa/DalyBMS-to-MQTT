@@ -2,8 +2,8 @@
 
 Protocol reference for the BMS write and unlock commands. Status as of 2026-10-19:
 
-- **Implemented:** cell voltage limits (0x19), pack voltage limits (0x1A) and the sleep timeout / current wave (0x13). The firmware sends them from MQTT and the web page.
-- **Not implemented:** MOSFET switching (0xD9, 0xDA), BMS reset (0x00), set SOC (0x21), balance thresholds (0x1F) and current limits (0x1B). The tables below keep them for reference.
+- **Implemented:** cell voltage limits (0x19), pack voltage limits (0x1A) the sleep timeout / current wave (0x13) and MOSFET switching (0xD9, 0xDA). The firmware sends them from MQTT and the web page.
+- **Not implemented:** BMS reset (0x00), set SOC (0x21), balance thresholds (0x1F) and current limits (0x1B). The tables below keep them for reference.
 
 Sources:
 - https://github.com/acpiccolo/Daly-BMS (`src/protocol.rs`). The Daly UART/485 Communications Protocol V1.2 spec is not in this repo; a copy is at https://robu.in/wp-content/uploads/2021/10/Daly-UART_485-Communications-Protocol-V1.21-1.pdf.
@@ -88,5 +88,5 @@ Frames are `A5 40 <cmd> 08 <data> <checksum>`. Extra reads said to need the unlo
 - Replies are normal 13-byte frames. The acpiccolo crate only checks length and checksum and ignores the payload.
 - Neither repo has write commands for voltage thresholds, rated capacity or balancing (the forum post above adds balance thresholds and current wave). 0x97 is read-only.
 - matthewgream defines read frames only for thresholds 0x59-0x60 (0x59 cell voltage, 0x5A voltage, 0x5B current, 0x5C sensor, 0x5D charge, 0x5E cell sensor, 0x5F cell balance, 0x60 short-circuit). Its README marks them "read/write (likely)" and also lists 0x5C twice. The code uses 0x5E for cell sensor.
-- `isKnownCommand` in `lib/daly/daly_protocol.h` accepts 0x90-0x98, the threshold reads 0x59 and 0x5A, and the writes 0x19, 0x1A, 0x13 and 0x53. Replies to 0x00, 0xD9, 0xDA, 0x21, 0x1F and 0x1B would be dropped until it is extended.
+- `isKnownCommand` in `lib/daly/daly_protocol.h` accepts 0x90-0x98, the threshold reads 0x59 and 0x5A, and the writes 0x19, 0x1A, 0x13, 0x53, 0xD9 and 0xDA. Replies to 0x00, 0x21, 0x1F and 0x1B would be dropped until it is extended.
 - Reset and set-SOC change BMS state. Treat with care.

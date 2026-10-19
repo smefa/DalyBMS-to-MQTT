@@ -110,7 +110,7 @@ const char* resultText(Result r) {
     case Result::NoLimits: return "bms limits not read yet";
     case Result::Invalid: return "values out of range, or a high level not above a low level";
     case Result::Busy: return "busy, a change is still being written";
-    default: return "bad request: give at least one limit, and only cell or only pack limits per request";
+    default: return "bad request: give at least one change, and only one of cell limits, pack limits, sleep timeout or a MOSFET per request";
     }
 }
 
@@ -192,6 +192,34 @@ Result applyProfile(DalyBms& bms, const char* pin, Profile p) {
 
 Result applyProfileTrusted(DalyBms& bms, Profile p) { return applyChecked(bms, profileRequest(p)); }
 
+bool parseOnOff(const char* s, size_t len, bool& out) {
+    auto is = [&](const char* name) { return strlen(name) == len && strncasecmp(s, name, len) == 0; };
+    if (is("on") || is("1") || is("true")) out = true;
+    else if (is("off") || is("0") || is("false")) out = false;
+    else return false;
+    return true;
+}
+
+namespace {
+
+Request mosRequest(bool charge, bool on) {
+    Request req;
+    (charge ? req.charge_mos : req.discharge_mos) = on ? 1 : 0;
+    return req;
+}
+
+} // namespace
+
+Result applyMos(DalyBms& bms, const char* pin, bool charge, bool on) {
+    const Result pr = checkPin(pin);
+    if (pr != Result::Queued) return pr;
+    return applyChecked(bms, mosRequest(charge, on));
+}
+
+Result applyMosTrusted(DalyBms& bms, bool charge, bool on) {
+    return applyChecked(bms, mosRequest(charge, on));
+}
+
 Result apply(DalyBms& bms, const char* pin, const Request& req) {
     const Result pr = checkPin(pin);
     if (pr != Result::Queued) return pr;
@@ -210,10 +238,20 @@ Result applyChecked(DalyBms& bms, const Request& req) {
     const daly::Thresholds pack = merge(req.pack, d.pack_high_l1_dv, d.pack_high_l2_dv,
                                         d.pack_low_l1_dv, d.pack_low_l2_dv, pack_any);
     const bool sleep_any = req.sleep_s != kUnset;
-    if (!cell_any && !pack_any && !sleep_any) return Result::BadRequest;
+    const bool chg_any = req.charge_mos != kUnset;
+    const bool dis_any = req.discharge_mos != kUnset;
+    if (!cell_any && !pack_any && !sleep_any && !chg_any && !dis_any) return Result::BadRequest;
     // Only one write can wait at a time, so one group per request.
-    if ((cell_any ? 1 : 0) + (pack_any ? 1 : 0) + (sleep_any ? 1 : 0) > 1) {
+    if ((cell_any ? 1 : 0) + (pack_any ? 1 : 0) + (sleep_any ? 1 : 0) + (chg_any ? 1 : 0) +
+            (dis_any ? 1 : 0) > 1) {
         return Result::BadRequest;
+    }
+    if (chg_any || dis_any) {
+        const int32_t v = chg_any ? req.charge_mos : req.discharge_mos;
+        if (v != 0 && v != 1) return Result::Invalid;
+        if (!bms.queueMosfet(chg_any, v == 1)) return Result::Busy;
+        APPLOG("settings: %s MOSFET %s accepted", chg_any ? "charge" : "discharge", v == 1 ? "on" : "off");
+        return Result::Queued;
     }
     if (sleep_any) {
         if (!d.have_sleep) return Result::NoLimits;
@@ -272,6 +310,21 @@ Result applyJson(DalyBms& bms, const char* json, size_t len) {
         if (doc[kPack[i]].is<double>()) req.pack[i] = packFromVolts(doc[kPack[i]].as<double>());
     }
     if (doc["sleep_timeout_s"].is<double>()) req.sleep_s = clampRound(doc["sleep_timeout_s"].as<double>());
+    // {"charge_mos":true} / {"discharge_mos":"off"}: a bool, or on/off as text or 1/0.
+    static const char* const kMos[2] = {"charge_mos", "discharge_mos"};
+    int32_t* const mos_req[2] = {&req.charge_mos, &req.discharge_mos};
+    for (uint8_t i = 0; i < 2; i++) {
+        JsonVariantConst v = doc[kMos[i]];
+        if (v.isNull()) continue;
+        bool on;
+        if (v.is<bool>()) on = v.as<bool>();
+        else if (v.is<const char*>()) {
+            const char* s = v.as<const char*>();
+            if (!parseOnOff(s, strlen(s), on)) return Result::BadRequest;
+        } else if (v.is<double>() && (v.as<double>() == 0 || v.as<double>() == 1)) on = v.as<double>() == 1;
+        else return Result::BadRequest;
+        *mos_req[i] = on ? 1 : 0;
+    }
     return apply(bms, doc["pin"] | "", req);
 }
 

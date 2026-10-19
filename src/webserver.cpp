@@ -219,6 +219,19 @@ void handleLimits() {
         if (field(kPack[i], v)) req.pack[i] = settings::packFromVolts(v);
     }
     if (field("sleep_timeout_s", v)) req.sleep_s = settings::clampRound(v);
+    // charge_mos / discharge_mos = on|off (or 1|0); an empty field leaves it alone.
+    static const char* const kMos[2] = {"charge_mos", "discharge_mos"};
+    int32_t* const mos_req[2] = {&req.charge_mos, &req.discharge_mos};
+    for (uint8_t i = 0; i < 2; i++) {
+        if (!server.hasArg(kMos[i]) || server.arg(kMos[i]).length() == 0) continue;
+        const String& a = server.arg(kMos[i]);
+        bool on;
+        if (!settings::parseOnOff(a.c_str(), a.length(), on)) {
+            server.send(400, "text/plain", "MOSFET must be on or off\n");
+            return;
+        }
+        *mos_req[i] = on ? 1 : 0;
+    }
     if (bad) {
         server.send(400, "text/plain", "not a number (use a decimal point)\n");
         return;
@@ -227,7 +240,8 @@ void handleLimits() {
     if (server.hasArg("profile")) {
         settings::Profile p;
         const String& name = server.arg("profile");
-        bool other = req.sleep_s != settings::kUnset;
+        bool other = req.sleep_s != settings::kUnset || req.charge_mos != settings::kUnset ||
+                     req.discharge_mos != settings::kUnset;
         for (uint8_t i = 0; i < 4; i++) {
             other = other || req.cell[i] != settings::kUnset || req.pack[i] != settings::kUnset;
         }

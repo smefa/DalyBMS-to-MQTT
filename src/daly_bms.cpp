@@ -72,6 +72,15 @@ bool DalyBms::queueSleepTimeout(uint16_t seconds) {
     return true;
 }
 
+bool DalyBms::queueMosfet(bool charge, bool on) {
+    if (writePending()) return false;
+    write_cmd_ = charge ? daly::CMD_SET_CHARGE_MOS : daly::CMD_SET_DISCHARGE_MOS;
+    write_mos_on_ = on;
+    write_state_ = WriteState::Queued;
+    write_serial_++;
+    return true;
+}
+
 bool DalyBms::queueCellLimits(const daly::Thresholds& t) {
     return queueWrite(daly::CMD_SET_CELL_THRESH, t);
 }
@@ -82,6 +91,7 @@ bool DalyBms::queuePackLimits(const daly::Thresholds& t) {
 
 // True when the limits we last read already equal the queued values.
 bool DalyBms::writeIsNoop() const {
+    if (writeIsMos()) return false;
     if (write_cmd_ == daly::CMD_SET_SLEEP_CFG) {
         return data_.have_sleep && data_.sleep_timeout_s == write_timeout_s_;
     }
@@ -98,17 +108,21 @@ bool DalyBms::writeIsNoop() const {
 
 void DalyBms::sendWrite() {
     uint8_t req[daly::FRAME_LEN];
-    if (write_cmd_ == daly::CMD_SET_SLEEP_CFG) {
+    const char* what = "sleep timeout";
+    if (writeIsMos()) {
+        daly::buildMosWrite(write_cmd_, write_mos_on_, req);
+        what = write_cmd_ == daly::CMD_SET_CHARGE_MOS ? (write_mos_on_ ? "charge MOSFET on" : "charge MOSFET off")
+                                                      : (write_mos_on_ ? "discharge MOSFET on" : "discharge MOSFET off");
+    } else if (write_cmd_ == daly::CMD_SET_SLEEP_CFG) {
         daly::buildSleepTimeoutWrite(data_.sleep_raw, write_timeout_s_, req);
     } else {
         daly::buildThresholdWrite(write_cmd_, write_values_, req);
+        what = write_cmd_ == daly::CMD_SET_CELL_THRESH ? "cell limits" : "pack limits";
     }
     while (serial_->available()) serial_->read();
     decoder_.reset();
     serial_->write(req, daly::FRAME_LEN);
-    APPLOG("bms: wrote %s", write_cmd_ == daly::CMD_SET_CELL_THRESH   ? "cell limits"
-                            : write_cmd_ == daly::CMD_SET_PACK_THRESH ? "pack limits"
-                                                                      : "sleep timeout");
+    APPLOG("bms: wrote %s", what);
     sent_at_ = millis();
     got_response_ = false;
     writing_ = true;
@@ -119,6 +133,16 @@ void DalyBms::sendWrite() {
 // read of the limits shows.
 void DalyBms::checkReadback(uint8_t applied) {
     if (write_state_ != WriteState::Verifying) return;
+    if (writeIsMos()) {
+        // The BMS may take a moment to move the switch: a reading that still shows the
+        // old state is not a verdict, the next sweep tries again until the deadline.
+        if (applied != daly::CMD_MOS) return;
+        const bool now_on = write_cmd_ == daly::CMD_SET_CHARGE_MOS ? data_.charge_mos : data_.discharge_mos;
+        if (now_on != write_mos_on_) return;
+        write_state_ = WriteState::Done;
+        APPLOG("bms: MOSFET read back ok");
+        return;
+    }
     if (applied != write_cmd_ + 0x40) return;
     if (applied == daly::CMD_SLEEP_CFG) {
         const bool ok = data_.sleep_timeout_s == write_timeout_s_;
@@ -178,11 +202,11 @@ void DalyBms::loop() {
 
     if (write_state_ == WriteState::Verifying && static_cast<int32_t>(now - verify_deadline_) >= 0) {
         write_state_ = WriteState::Mismatch;
-        APPLOG("bms: limits not read back in time");
+        APPLOG("bms: write not read back in time");
     }
 
     switch (state_) {
-    case State::Idle:
+    case State::Idle: {
         // Writes go out between sweeps, and only after one has finished so the
         // no-change check has the current limits to compare with.
         if (write_state_ == WriteState::Queued && sweeps_ > 0) {
@@ -193,12 +217,18 @@ void DalyBms::loop() {
                 return;
             }
         }
-        if (now - sweep_started_at_ >= poll_interval_ms_) {
+        // A MOSFET read-back keeps sweeping every couple of seconds until the switch shows
+        // (or the deadline), however slow the normal polling is.
+        const uint32_t gap = (write_state_ == WriteState::Verifying && writeIsMos())
+                                 ? min<uint32_t>(poll_interval_ms_, kMosVerifyGapMs)
+                                 : poll_interval_ms_;
+        if (now - sweep_started_at_ >= gap) {
             sweep_started_at_ = now;
             cmd_idx_ = 0;
             sendCurrentCommand();
         }
         return;
+    }
 
     case State::Waiting:
         if (writing_) {
@@ -218,8 +248,11 @@ void DalyBms::loop() {
                 writing_ = false;
                 write_state_ = WriteState::Verifying;
                 verify_deadline_ = now + 30000;
-                force_limits_ = true;
-                limit_sweeps_ = 0;
+                // The MOSFET state is part of every sweep; the limits need not be re-read.
+                if (!writeIsMos()) {
+                    force_limits_ = true;
+                    limit_sweeps_ = 0;
+                }
                 state_ = State::Idle;
                 sweep_started_at_ = now - poll_interval_ms_; // sweep right away
             }

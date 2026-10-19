@@ -30,7 +30,16 @@ struct Request {
     int32_t cell[4] = {kUnset, kUnset, kUnset, kUnset}; // high L1, high L2, low L1, low L2 (mV)
     int32_t pack[4] = {kUnset, kUnset, kUnset, kUnset}; // same order (0.1 V)
     int32_t sleep_s = kUnset;                           // BMS sleep timeout (s)
+    int32_t charge_mos = kUnset;                        // 1 = switch the charge MOSFET on, 0 = off
+    int32_t discharge_mos = kUnset;                     // same for the discharge MOSFET
 };
+
+// "on"/"off" in any case, "1"/"0", "true"/"false".
+bool parseOnOff(const char* s, size_t len, bool& out);
+// Switches one MOSFET. The PIN-less form is for the MQTT switches, where the broker
+// login is the gate (as for the power mode and the profile select).
+Result applyMos(DalyBms& bms, const char* pin, bool charge, bool on);
+Result applyMosTrusted(DalyBms& bms, bool charge, bool on);
 
 // Two ready-made sets of pack limits (levels in config.h, applied to L1 and L2 alike).
 enum class Profile : uint8_t { Normal, Storage };

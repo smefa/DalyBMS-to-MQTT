@@ -28,7 +28,7 @@
 // Password required to push an over-the-air firmware update.
 #define OTA_PASSWORD    "change-me"
 
-// PIN for changing the BMS voltage limits (web page and MQTT). Required, there is no
+// PIN for changing BMS settings and switching the MOSFETs (web page and MQTT limits/set). Required, there is no
 // default. Sent in clear over plain HTTP.
 #define SETTINGS_PIN    "0000"
 

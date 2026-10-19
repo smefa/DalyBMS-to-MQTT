@@ -43,6 +43,9 @@ font-variant-numeric:tabular-nums}
 .pill{padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;
 background:var(--line);color:var(--mut)}
 .pill.on{background:var(--ok);color:#fff}.pill.off{background:var(--bad);color:#fff}
+.pill.tog{cursor:pointer;border:0;font-family:inherit}.pill.tog:active{opacity:.7}
+.pill.busy{opacity:.5}
+#mmsg{margin-top:6px;font-size:13px;color:var(--mut)}
 details summary{cursor:pointer;color:var(--mut)}
 .lt{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums;margin-bottom:6px}
 .lt th{font-size:11px;color:var(--mut);font-weight:500;text-align:right;padding:3px 0}
@@ -88,8 +91,9 @@ footer a{color:var(--mut)}
 
 <div class="card">
   <div class="row"><span>State</span><b id="state">--</b></div>
-  <div class="row"><span>Charge MOS</span><span class="pill" id="cmos">--</span></div>
-  <div class="row"><span>Discharge MOS</span><span class="pill" id="dmos">--</span></div>
+  <div class="row"><span>Charge MOS</span><button type="button" class="pill tog" id="cmos" onclick="toggleMos('charge_mos','cmos')" title="Click to switch (PIN)">--</button></div>
+  <div class="row"><span>Discharge MOS</span><button type="button" class="pill tog" id="dmos" onclick="toggleMos('discharge_mos','dmos')" title="Click to switch (PIN)">--</button></div>
+  <div id="mmsg"></div>
   <div class="row"><span>Remaining</span><b id="rem">--</b></div>
   <div class="row"><span id="etaK">Time left</span><b id="eta">--</b></div>
   <div class="row"><span>Cycles</span><b id="cyc">--</b></div>
@@ -154,7 +158,7 @@ footer a{color:var(--mut)}
 </div>
 
 <dialog id="pind"><form method="dialog" id="pinf">
-  <div style="margin-bottom:8px">Enter PIN to change BMS settings</div>
+  <div style="margin-bottom:8px" id="pinq">Enter PIN to change BMS settings</div>
   <input id="pin" type="password" inputmode="numeric" autocomplete="off">
   <div class="btns"><button value="ok">OK</button><button value="cancel" formnovalidate>Cancel</button></div>
 </form></dialog>
@@ -201,7 +205,12 @@ function render(s){
 
   $('state').textContent=s.status.state;
   [['cmos',s.status.charge_mos],['dmos',s.status.discharge_mos]].forEach(function(p){
-    var e=$(p[0]);e.textContent=p[1]?'ON':'OFF';e.className='pill '+(p[1]?'on':'off')});
+    var e=$(p[0]);e.textContent=p[1]?'ON':'OFF';e.className='pill tog '+(p[1]?'on':'off');
+    mosNow[p[0]]=!!p[1]});
+  if(mosWant){
+    if(mosNow[mosWant.id]==mosWant.on){$('mmsg').textContent='';mosWant=null}
+    else if(s.limits.write=='mismatch'){$('mmsg').textContent='The BMS did not switch it.';mosWant=null}
+  }
   $('rem').textContent=(s.status.remaining_mah/1000).toFixed(1)+' Ah';
   $('cyc').textContent=s.status.cycles;
   // Time to empty at the present draw. The BMS does not report full capacity,
@@ -278,8 +287,27 @@ $('lset').addEventListener('toggle',function(){
   });
 });
 function setProfile(name){saveLimits('profile',name)}
-function askPin(cb){
+// Click a MOS pill to switch it. Asks for the PIN, then the pill follows what the BMS
+// reports on the next readings, not what was clicked.
+var mosNow={},mosWant=null;
+function toggleMos(field,id){
+  if(!(id in mosNow))return;
+  var on=!mosNow[id];
+  askPin(function(pin){
+    var b=new URLSearchParams();
+    b.set(field,on?'on':'off');b.set('pin',pin);
+    $('mmsg').textContent='sending...';
+    fetch('/limits',{method:'POST',body:b})
+      .then(function(r){return r.text().then(function(t){
+        mosWant=r.status==202?{id:id,on:on}:null;
+        $('mmsg').textContent=r.status==202?'Switching '+(field=='charge_mos'?'charge':'discharge')+' MOS '+(on?'on':'off')+'...':t.trim();
+      })})
+      .catch(function(){$('mmsg').textContent='request failed'});
+  },'Enter PIN to switch the '+(field=='charge_mos'?'charge':'discharge')+' MOSFET '+(on?'on':'off'));
+}
+function askPin(cb,text){
   var d=$('pind'),f=$('pinf');
+  $('pinq').textContent=text||'Enter PIN to change BMS settings';
   $('pin').value='';
   f.onsubmit=function(e){var v=$('pin').value;
     if(e.submitter&&e.submitter.value=='ok'&&v)setTimeout(function(){cb(v)},0)};

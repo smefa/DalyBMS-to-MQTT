@@ -73,6 +73,12 @@ void buildSleepTimeoutWrite(const uint8_t current[8], uint16_t timeout_s, uint8_
     out[FRAME_LEN - 1] = checksum(out, FRAME_LEN - 1);
 }
 
+void buildMosWrite(uint8_t cmd, bool on, uint8_t* out) {
+    buildRequest(cmd, out);
+    out[4] = on ? 0x01 : 0x00;
+    out[FRAME_LEN - 1] = checksum(out, FRAME_LEN - 1);
+}
+
 bool FrameDecoder::prefixPlausible() const {
     if (len_ >= 1 && buf_[0] != START_BYTE) return false;
     // buf_[1] is the address byte and is intentionally not checked; see the

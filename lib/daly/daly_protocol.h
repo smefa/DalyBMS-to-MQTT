@@ -35,12 +35,17 @@ enum Command : uint8_t {
     // forum capture, not the spec: see docs/daly-write-commands.md.
     CMD_SLEEP_CFG = 0x53,
     CMD_SET_SLEEP_CFG = 0x13,
+    // MOSFET switches: byte 4 of the payload is 1 for on, 0 for off. Captured from the
+    // Windows app. Read the state back with CMD_MOS.
+    CMD_SET_DISCHARGE_MOS = 0xD9,
+    CMD_SET_CHARGE_MOS = 0xDA,
 };
 
 inline bool isKnownCommand(uint8_t cmd) {
     return (cmd >= CMD_MIN && cmd <= CMD_MAX) || cmd == CMD_CELL_THRESH ||
            cmd == CMD_PACK_THRESH || cmd == CMD_SET_CELL_THRESH || cmd == CMD_SET_PACK_THRESH ||
-           cmd == CMD_SLEEP_CFG || cmd == CMD_SET_SLEEP_CFG;
+           cmd == CMD_SLEEP_CFG || cmd == CMD_SET_SLEEP_CFG || cmd == CMD_SET_DISCHARGE_MOS ||
+           cmd == CMD_SET_CHARGE_MOS;
 }
 
 constexpr uint8_t MAX_CELLS = 32;
@@ -157,6 +162,9 @@ constexpr uint16_t SLEEP_TIMEOUT_MIN_S = 10;
 // Build the 0x13 write: `current` is the payload of the last 0x53 reply, copied back
 // unchanged except for the timeout in bytes 5-6 of the payload (frame bytes 9-10).
 void buildSleepTimeoutWrite(const uint8_t current[8], uint16_t timeout_s, uint8_t* out);
+
+// Build the write that switches a MOSFET (CMD_SET_CHARGE_MOS or CMD_SET_DISCHARGE_MOS).
+void buildMosWrite(uint8_t cmd, bool on, uint8_t* out);
 
 // Byte-at-a-time frame assembler with resynchronisation.
 //

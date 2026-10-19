@@ -40,7 +40,9 @@ constexpr uint32_t kRetainedGraceMs = 1500;
 constexpr uint16_t kSubscribePacketId = 1;
 constexpr uint16_t kSubscribeLimitsPacketId = 2;
 constexpr uint16_t kSubscribeProfilePacketId = 3;
-constexpr uint8_t kSubscriptions = 3;
+constexpr uint16_t kSubscribeChargeMosPacketId = 4;
+constexpr uint16_t kSubscribeDischargeMosPacketId = 5;
+constexpr uint8_t kSubscriptions = 5;
 
 DalyBms* bms = nullptr;
 WebSocketsClient ws;
@@ -53,6 +55,8 @@ char limits_topic[64];
 char limits_set_topic[64];
 char limits_result_topic[64];
 char profile_set_topic[64];
+char charge_mos_set_topic[64];
+char discharge_mos_set_topic[64];
 
 bool connected_ = false;
 bool connect_sent_ = false;
@@ -119,6 +123,8 @@ bool result_owed_ = false;
 
 voltguard::State last_guard_ = voltguard::State::Normal;
 const char* last_profile_ = "";
+uint8_t last_mos_ = 0; // bit 0 charge, bit 1 discharge, as last reported
+uint8_t mosBits(const daly::BmsData& d) { return (d.charge_mos ? 1 : 0) | (d.discharge_mos ? 2 : 0); }
 bool last_bms_ok_ = false;
 // A change seen while the first report is held back, or whose report failed, stays
 // owed until a report has actually gone out.
@@ -173,8 +179,7 @@ constexpr Entity kEntities[] = {
     {"sensor", "temp_min", "Lowest temperature", "\xC2\xB0""C", "temperature", "measurement", false},
     {"sensor", "state", "Battery state", nullptr, nullptr, nullptr, false},
     {"sensor", "cycles", "Cycles", nullptr, nullptr, "total_increasing", false},
-    {"binary_sensor", "charge_mos", "Charge MOSFET", nullptr, nullptr, nullptr, false},
-    {"binary_sensor", "discharge_mos", "Discharge MOSFET", nullptr, nullptr, nullptr, false},
+    // (The charge and discharge MOSFETs are switches, below.)
     // Read "bms_ok" before trusting the rest: a silent BMS leaves the last
     // values in place, and only this and stale_s say so.
     {"binary_sensor", "bms_ok", "BMS data fresh", nullptr, "connectivity", nullptr, true},
@@ -329,6 +334,37 @@ bool publishProfileDiscovery() {
     return publish(topic, out, n, true);
 }
 
+// The MOSFET "switch"es. They replace the binary sensors of the same id, which an older
+// firmware left retained; clearMosSensorDiscovery() removes those.
+// Not retained, no PIN: the broker login is the gate, as for the profile select.
+bool publishMosDiscovery(bool charge) {
+    const char* id = charge ? "charge_mos" : "discharge_mos";
+    JsonDocument doc;
+    baseConfig(doc, id, charge ? "Charge MOSFET" : "Discharge MOSFET");
+    requireFreshBms(doc);
+    char tpl[48];
+    snprintf(tpl, sizeof tpl, "{{ value_json.%s }}", id);
+    doc["val_tpl"] = tpl;
+    doc["cmd_t"] = charge ? charge_mos_set_topic : discharge_mos_set_topic;
+
+    char topic[128];
+    discoveryTopic(topic, sizeof topic, "switch", id);
+    char out[768];
+    if (doc.overflowed()) return false;
+    const size_t n = serializeJson(doc, out, sizeof out);
+    if (n >= sizeof out) return false;
+    return publish(topic, out, n, true);
+}
+
+// An empty retained payload deletes a retained discovery config.
+bool clearMosSensorDiscovery() {
+    char topic[128];
+    discoveryTopic(topic, sizeof topic, "binary_sensor", "charge_mos");
+    bool ok = publish(topic, "", 0, true);
+    discoveryTopic(topic, sizeof topic, "binary_sensor", "discharge_mos");
+    return publish(topic, "", 0, true) && ok;
+}
+
 bool publishCellDiscovery(uint8_t cell) {
     char id[12], name[16];
     snprintf(id, sizeof id, "cell_%u", cell);
@@ -355,7 +391,11 @@ bool publishCellDiscovery(uint8_t cell) {
     return publish(topic, out, n, true);
 }
 
-// Sends the next config, if any. Order: the fixed entities, the power-mode select,
+// Steps after the fixed entities and before the cells: power-mode select, profile
+// select, removal of the old MOSFET sensors, charge switch, discharge switch.
+constexpr uint8_t kExtraSteps = 5;
+
+// Sends the next config, if any. Order: the fixed entities, the steps above,
 // then one per cell. Cells exist only for the cells the BMS reported, so they
 // wait for the first good frame.
 void stepDiscovery() {
@@ -374,16 +414,24 @@ void stepDiscovery() {
         if (publishProfileDiscovery()) discovery_next_++;
         return;
     }
+    if (discovery_next_ == kEntityCount + 2) {
+        if (clearMosSensorDiscovery()) discovery_next_++;
+        return;
+    }
+    if (discovery_next_ == kEntityCount + 3 || discovery_next_ == kEntityCount + 4) {
+        if (publishMosDiscovery(discovery_next_ == kEntityCount + 3)) discovery_next_++;
+        return;
+    }
 
     const uint8_t cells = bms->data().cell_count;
     if (cells == 0) return; // keep waiting for the BMS to tell us
-    const uint8_t cell = discovery_next_ - kEntityCount - 1; // 1-based: the two selects come first
+    const uint8_t cell = discovery_next_ - kEntityCount - kExtraSteps + 1; // 1-based
     if (cell <= cells) {
         if (publishCellDiscovery(cell)) discovery_next_++;
         return;
     }
     discovery_pending_ = false;
-    APPLOG("mqtt: discovery sent, %u entities + mode select + %u cells", kEntityCount, cells);
+    APPLOG("mqtt: discovery sent, %u entities + selects and switches + %u cells", kEntityCount, cells);
 }
 
 // ---- State -----------------------------------------------------------------
@@ -543,6 +591,22 @@ void handlePublish(const mqttlite::Publish& p) {
         }
         return;
     }
+    for (const bool charge : {true, false}) {
+        const char* topic = charge ? charge_mos_set_topic : discharge_mos_set_topic;
+        if (p.topic_len != strlen(topic) || memcmp(p.topic, topic, p.topic_len) != 0) continue;
+        bool on;
+        if (!settings::parseOnOff(reinterpret_cast<const char*>(p.payload), p.payload_len, on)) {
+            APPLOG("mqtt: ignoring MOSFET command");
+            return;
+        }
+        const settings::Result r = settings::applyMosTrusted(*bms, charge, on);
+        publishResult(settings::resultText(r));
+        if (r == settings::Result::Queued) {
+            result_serial_ = bms->writeSerial();
+            result_owed_ = true;
+        }
+        return;
+    }
     if (p.topic_len != strlen(mode_set_topic) ||
         memcmp(p.topic, mode_set_topic, p.topic_len) != 0) {
         return;
@@ -564,7 +628,7 @@ void onSuback(int rc) {
         APPLOG("mqtt: broker refused a subscribe (%s or %s); that command cannot be sent "
                      "over MQTT (does the broker user have read access?)",
                      mode_set_topic, limits_set_topic);
-        // (profile_set_topic is the third)
+        // (the profile and the two MOSFET switch topics are the rest)
     }
 }
 
@@ -611,6 +675,8 @@ void onConnack(int rc) {
     sendRaw(mqttlite::encodeSubscribe(buf, sizeof buf, kSubscribePacketId, mode_set_topic));
     sendRaw(mqttlite::encodeSubscribe(buf, sizeof buf, kSubscribeLimitsPacketId, limits_set_topic));
     sendRaw(mqttlite::encodeSubscribe(buf, sizeof buf, kSubscribeProfilePacketId, profile_set_topic));
+    sendRaw(mqttlite::encodeSubscribe(buf, sizeof buf, kSubscribeChargeMosPacketId, charge_mos_set_topic));
+    sendRaw(mqttlite::encodeSubscribe(buf, sizeof buf, kSubscribeDischargeMosPacketId, discharge_mos_set_topic));
     discovery_next_ = 0;
     discovery_pending_ = true;
     last_state_ = 0; // publish state right away
@@ -676,7 +742,7 @@ void onEvent(WStype_t type, uint8_t* payload, size_t length) {
 // select are already out, and the cells will follow once it answers.
 bool discoveryDone() {
     return !discovery_pending_ ||
-           (discovery_next_ > kEntityCount + 1 && bms->data().cell_count == 0 &&
+           (discovery_next_ >= kEntityCount + kExtraSteps && bms->data().cell_count == 0 &&
             millis() >= kFirstDataWaitMs);
 }
 
@@ -691,6 +757,8 @@ void begin(DalyBms* b) {
     snprintf(limits_set_topic, sizeof limits_set_topic, "%s/limits/set", MQTT_BASE_TOPIC);
     snprintf(limits_result_topic, sizeof limits_result_topic, "%s/limits/result", MQTT_BASE_TOPIC);
     snprintf(profile_set_topic, sizeof profile_set_topic, "%s/profile/set", MQTT_BASE_TOPIC);
+    snprintf(charge_mos_set_topic, sizeof charge_mos_set_topic, "%s/charge_mos/set", MQTT_BASE_TOPIC);
+    snprintf(discharge_mos_set_topic, sizeof discharge_mos_set_topic, "%s/discharge_mos/set", MQTT_BASE_TOPIC);
     ws.onEvent(onEvent);
     ws.setReconnectInterval(kReconnectMs);
     // The server itself is chosen by selectServer() once we know which network
@@ -769,6 +837,12 @@ void loop() {
     const bool profile_changed = strcmp(profile, last_profile_) != 0;
     last_profile_ = profile;
 
+    // A MOSFET switched from here (or at the BMS itself) goes out at once, so the switch
+    // in Home Assistant follows instead of waiting for the next periodic report.
+    const uint8_t mos = mosBits(bms->data());
+    const bool mos_changed = mos != last_mos_;
+    last_mos_ = mos;
+
     // Same for "BMS data fresh": it going stale must reach Home Assistant now, not
     // at the next periodic report.
     const bool bms_ok = bms->valid();
@@ -808,7 +882,7 @@ void loop() {
     const bool retry_due = retry_pending_ && static_cast<int32_t>(millis() - retry_at_) >= 0;
     // (A disabled guard differs from the initial snapshot at boot; that is not news.)
     if (guard_changed && g != voltguard::State::Disabled) urgent_owed_ = true;
-    if (profile_changed || bms_ok_changed) change_owed_ = true;
+    if (profile_changed || bms_ok_changed || mos_changed) change_owed_ = true;
     const bool want = (first_ready && urgent_owed_) || (data_ready && (change_owed_ || due || retry_due));
     // After a failed report wait out the 5 s, whatever else asks for one.
     if (want && !(retry_pending_ && !retry_due)) {
@@ -851,7 +925,8 @@ bool writePending() { return bms != nullptr && bms->writePending(); }
 
 bool reportPending() {
     return connected_ && (voltguard::status().state != last_guard_ || retry_pending_ || change_owed_ ||
-                          strcmp(settings::currentProfile(bms->data()), last_profile_) != 0);
+                          strcmp(settings::currentProfile(bms->data()), last_profile_) != 0 ||
+                          mosBits(bms->data()) != last_mos_);
 }
 
 bool settled() { return connected_ && published_ && discoveryDone() && suback_seen_; }

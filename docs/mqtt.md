@@ -4,11 +4,11 @@ The bridge speaks MQTT 3.1.1 inside binary WebSocket frames (subprotocol
 `mqtt`), over `wss://` by default. That lets it reach a broker through a reverse
 proxy on port 443, which is the usual way to expose Home Assistant over HTTPS.
 
-It publishes everything, and takes three kinds of command back: the power mode, the
-BMS voltage limits and the pack voltage profile (all below). The broker user
-therefore needs **write** access to `dalybms/#` and `homeassistant/#` (the retained
-discovery configs) and **read** access to `dalybms/mode/set`, `dalybms/limits/set`
-and `dalybms/profile/set`. Without the read access the bridge logs `broker refused
+It publishes everything, and takes four kinds of command back: the power mode, the
+BMS voltage limits, the pack voltage profile and the MOSFET switches (all below). The
+broker user therefore needs **write** access to `dalybms/#` and `homeassistant/#` (the
+retained discovery configs) and **read** access to `dalybms/mode/set`, `dalybms/limits/set`,
+`dalybms/profile/set`, `dalybms/charge_mos/set` and `dalybms/discharge_mos/set`. Without the read access the bridge logs `broker refused
 a subscribe` and carries on, but those commands cannot be received.
 
 ## Topics
@@ -24,6 +24,7 @@ With `MQTT_BASE_TOPIC "dalybms"`:
 | `dalybms/limits/set` | **in** | **never** | JSON command to change the limits (below) |
 | `dalybms/limits/result` | out | no | `queued`, then `done` / `unchanged` / `mismatch`; or why it was refused |
 | `dalybms/profile/set` | **in** | no | `normal` or `storage`, the bare profile name (see [Pack voltage profiles](#pack-voltage-profiles)) |
+| `dalybms/charge_mos/set`, `dalybms/discharge_mos/set` | **in** | no | `ON` or `OFF` (see [Switching the MOSFETs](#switching-the-mosfets)) |
 | `homeassistant/<component>/dalybms/<id>/config` | out | yes | MQTT discovery |
 
 The state document is also sent immediately whenever the low-voltage guard
@@ -72,6 +73,28 @@ L1 0.1 V inside by default (normal: high 14.1 / 14.2, low 11.1 / 11.0).
 - Web page: the Normal / Storage buttons under "Change BMS settings" (PIN required).
 
 Outcomes are reported on `dalybms/limits/result` like any other limits change.
+
+## Switching the MOSFETs
+
+The **Charge MOSFET** and **Discharge MOSFET** are Home Assistant switches. They publish
+`ON` or `OFF` to `dalybms/charge_mos/set` or `dalybms/discharge_mos/set` (not retained, no
+PIN: the broker login is the gate, as for the profile select). Turning the discharge MOSFET
+off cuts the load; turning the charge MOSFET off stops charging.
+
+- With a PIN, over MQTT: `{"pin":"your-pin","discharge_mos":"off"}` to `dalybms/limits/set`
+  (`true`/`false`, `"on"`/`"off"` and `1`/`0` are all accepted). One MOSFET per command.
+- Web page: click the Charge MOS or Discharge MOS pill (PIN required). The pill changes to
+  what the BMS reports after the switch, not to what was clicked.
+- The command is always sent, even if the last reading shows that state already. The bridge
+  then reads the BMS back (0x93) for up to 30 s; `dalybms/limits/result` reports `queued`,
+  then `done`, or `mismatch` if the BMS never showed the new state.
+- The switch follows the new state in the next state document, which is sent at once when a
+  MOSFET changes.
+- Only high mode is listening all the time. In normal and storage mode the bridge is awake
+  for seconds per report, and a non-retained switch command sent while it sleeps is lost.
+- These replace the earlier binary sensors with the same names. On the first discovery the
+  bridge deletes the old retained `binary_sensor` configs, so those entities disappear from
+  Home Assistant and automations that used them need pointing at the switches.
 
 ## Power modes
 
@@ -159,7 +182,7 @@ Things to know about normal and storage:
 | Highest / lowest cell, imbalance | mV | |
 | Highest / lowest temperature | °C | |
 | Battery state | | `idle`, `charging`, `discharging` |
-| Charge / discharge MOSFET | | binary |
+| **Charge / discharge MOSFET** | | switch, see [Switching the MOSFETs](#switching-the-mosfets) |
 | Cycles | | |
 | **BMS data fresh** | | binary, diagnostic |
 | **Seconds since BMS frame** | s | diagnostic |

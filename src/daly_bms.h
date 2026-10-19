@@ -71,6 +71,10 @@ public:
     // write carries the other settings of that frame back unchanged.
     bool queueSleepTimeout(uint16_t seconds);
 
+    // Switches the charge or discharge MOSFET. Always sent, even if the last reading
+    // says it is already in that state; the 0x93 reading afterwards is the verdict.
+    bool queueMosfet(bool charge, bool on);
+
     enum class WriteState : uint8_t {
         None,      // nothing requested since boot
         Queued,    // waiting for a gap between sweeps
@@ -114,9 +118,13 @@ private:
     void sendWrite();
     void checkReadback(uint8_t applied);
     bool writeIsNoop() const;
+    bool writeIsMos() const {
+        return write_cmd_ == daly::CMD_SET_CHARGE_MOS || write_cmd_ == daly::CMD_SET_DISCHARGE_MOS;
+    }
     bool force_limits_ = false; // read the limits on the next sweep whatever else is true
     bool writing_ = false;      // the request in flight is a write
     uint8_t write_cmd_ = 0;
+    bool write_mos_on_ = false;
     daly::Thresholds write_values_ = {};
     uint16_t write_timeout_s_ = 0;
     uint32_t verify_deadline_ = 0;
@@ -130,6 +138,7 @@ private:
     // The BMS normally answers within ~30 ms. 0x95 streams several frames back
     // to back, and we deliberately wait out the whole window to collect them.
     static constexpr uint32_t kResponseTimeoutMs = 250;
+    static constexpr uint32_t kMosVerifyGapMs = 2000;
 
     Stream* serial_ = nullptr;
     daly::FrameDecoder decoder_;

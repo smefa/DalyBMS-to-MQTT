@@ -1,6 +1,6 @@
 # DALY BMS to Home Assistant
 
-A Wemos D1 Mini reads a DALY battery management system (BMS) over its UART port and publishes the pack data to Home Assistant over MQTT. The data travels over a WebSocket (`wss://`), so it works through a reverse proxy on port 443. The board also serves a small web dashboard.
+A Wemos D1 Mini reads a DALY battery management system (BMS) over its UART port and publishes the pack data to Home Assistant over MQTT. The data travels over a WebSocket (`wss://`), so it works through a reverse proxy on port 443. The board also serves a small web dashboard. From it, or from Home Assistant, you can switch the charge and discharge MOSFETs and change the BMS voltage limits (the web page asks for a PIN).
 
 <table>
   <tr>

@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-10-19. Test hardware: Wemos D1 Mini on a DALY 4S 12 V 100 A BMS.
+Updated 2026-10-20. Test hardware: Wemos D1 Mini on a DALY 4S 12 V 100 A BMS.
 
 ## Working on hardware
 
@@ -18,6 +18,7 @@ Updated 2026-10-19. Test hardware: Wemos D1 Mini on a DALY 4S 12 V 100 A BMS.
 - Switching mode from Home Assistant has not been recorded as tested end to end.
 - The low-voltage guard's fast poll while `counting` has not been tested on hardware.
 - Current draw has not been measured in any mode.
+- MOSFET switching (0xD9, 0xDA) from the web pills and the Home Assistant switches builds and passes unit tests against the captured frames, but has not been run on the BMS. Check the read-back result the first time ([MQTT: switching the MOSFETs](mqtt.md#switching-the-mosfets)).
 - The sleep-timeout write (0x13) uses a frame layout from a forum capture. Check the read-back the first time (see [MQTT: changing the BMS voltage limits](mqtt.md#changing-the-bms-voltage-limits)).
 - `dalybms.local` is unreliable in high mode, because light sleep misses some multicast queries. Use the IP address or `dalybms.lan`.
 - An OTA from a build older than the 2026-10-17 fix can leave the board with a solid blue LED and no WiFi. Only a power cut clears it.
