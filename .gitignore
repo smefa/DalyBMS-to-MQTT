@@ -13,3 +13,7 @@ tools/
 dev-notes/
 
 test/
+# Agent instructions and private agent memory (local only)
+AGENTS.md
+CLAUDE.md
+.agents/

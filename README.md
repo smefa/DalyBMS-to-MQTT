@@ -43,5 +43,6 @@ Running on hardware with a 4S DALY BMS. MQTT, the dashboard and OTA updates work
 
 - [Wiring](docs/wiring.md)
 - [MQTT and Home Assistant](docs/mqtt.md)
+- [Home Assistant card](homeassistant/README.md) (install through HACS)
 - [Status](docs/status.md)
 - [DALY write commands](docs/daly-write-commands.md)
